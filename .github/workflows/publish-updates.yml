@@ -44,3 +44,25 @@ jobs:
           prerelease: false
           args: ${{ matrix.args }}
 
+  clean-release-signature-files:
+    runs-on: ubuntu-22.04
+    needs: publish
+    steps:
+      - uses: actions/github-script@v7
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        with:
+          script: |
+            const release = await github.rest.repos.getReleaseByTag({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag: process.env.RELEASE_TAG,
+            });
+            for (const asset of release.data.assets.filter(({ name }) => name.endsWith('.sig'))) {
+              await github.rest.repos.deleteReleaseAsset({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                asset_id: asset.id,
+              });
+            }
+
