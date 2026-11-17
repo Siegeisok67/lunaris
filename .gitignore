@@ -1,0 +1,12 @@
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+.env
+.env.*
+!.env.example
+npm-debug.log*
+installers/lunaris-updater.key
+
+.secrets/lunaris-updater.key
+.secrets/lunaris-updater.key.pub
