@@ -4,6 +4,8 @@ export type ProviderId = "ollama" | "llamacpp" | "openrouter" | "openai" | "anth
 export type ProviderRole = "architect" | "executor";
 export type ExecutorMode = "handoff" | "stream";
 export type AppTheme = "lunar" | "aurora" | "violet" | "ember" | "rose" | "glacier" | "cosmos";
+export type BackgroundScene = "moonlit" | "aurora" | "nebula" | "meteor" | "eclipse" | "quiet";
+export type BackgroundMotion = "system" | "reduced" | "still";
 export type ContextMode = "auto" | "manual";
 
 export interface ProviderConfig {

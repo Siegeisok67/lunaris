@@ -27,7 +27,7 @@ const navigation = [
 ];
 
 export function Sidebar({ page, history, settings, onNavigate, onOpenSession, resources, resourceError, monitorResources, onRefreshResources }: SidebarProps) {
-  const recent = history.slice(0, 5);
+  const recent = [...history].sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || Date.parse(b.updatedAt) - Date.parse(a.updatedAt)).slice(0, 5);
   const provider = settings.architect.provider === "ollama" ? "Ollama local" : settings.architect.provider;
   return (
     <aside className="sidebar">
@@ -45,7 +45,7 @@ export function Sidebar({ page, history, settings, onNavigate, onOpenSession, re
         <div className="sidebar-label-row"><p className="sidebar-label">RECENT PROMPTS</p><span>{history.length}</span></div>
         {recent.length ? recent.map((session) => (
           <button className="history-link" key={session.id} onClick={() => onOpenSession(session)} title={session.title}>
-            <span className="history-dot" /><span>{session.title}</span>
+            <span className="history-dot" /><span>{session.pinned ? "★ " : ""}{session.title}</span>
           </button>
         )) : <p className="sidebar-empty">Your compiled prompts will appear here.</p>}
         {history.length > 5 && <button className="history-more" onClick={() => onNavigate("history")}>View all prompts</button>}

@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { DEFAULT_SKILLS, defaultSkillFiles } from "../data/defaultSkills";
-import { DEFAULT_PROVIDER_SETTINGS, type AppTheme, type ProviderSettings } from "../types/provider";
+import { DEFAULT_PROVIDER_SETTINGS, type AppTheme, type BackgroundMotion, type BackgroundScene, type ProviderSettings } from "../types/provider";
 import type { PromptSession } from "../types/architect";
 import type { SkillDefinition, SkillFile } from "../types/skills";
 import { EMPTY_TOOL_CATALOG, type ToolCatalog } from "../types/tools";
@@ -12,6 +12,9 @@ export interface LunarisSettings {
   theme: AppTheme;
   monitorResources: boolean;
   modelPreference: "balanced" | "specialists";
+  backgroundScene: BackgroundScene;
+  backgroundIntensity: number;
+  backgroundMotion: BackgroundMotion;
 }
 
 export interface HistoryCollection {
@@ -25,6 +28,9 @@ const DEFAULT_SETTINGS: LunarisSettings = {
   theme: "lunar",
   monitorResources: true,
   modelPreference: "balanced",
+  backgroundScene: "moonlit",
+  backgroundIntensity: 70,
+  backgroundMotion: "system",
 };
 
 const DEFAULT_HISTORY: HistoryCollection = { sessions: [] };
@@ -48,6 +54,9 @@ export async function loadSettings(): Promise<LunarisSettings> {
     theme: (["lunar", "aurora", "violet", "ember", "rose", "glacier", "cosmos"].includes(stored.theme) ? stored.theme : "lunar") as AppTheme,
     monitorResources: typeof stored.monitorResources === "boolean" ? stored.monitorResources : true,
     modelPreference: stored.modelPreference === "specialists" ? "specialists" : "balanced",
+    backgroundScene: (["moonlit", "aurora", "nebula", "meteor", "eclipse", "quiet"].includes(stored.backgroundScene) ? stored.backgroundScene : "moonlit") as BackgroundScene,
+    backgroundIntensity: typeof stored.backgroundIntensity === "number" ? Math.max(0, Math.min(100, stored.backgroundIntensity)) : 70,
+    backgroundMotion: (["system", "reduced", "still"].includes(stored.backgroundMotion) ? stored.backgroundMotion : "system") as BackgroundMotion,
   };
 }
 

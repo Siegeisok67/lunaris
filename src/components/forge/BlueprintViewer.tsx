@@ -2,9 +2,11 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowRight,
   Check,
+  CheckCircle2,
   CircleAlert,
   Copy,
   FileText,
+  FileJson,
   LoaderCircle,
   Play,
   Sparkles,
@@ -19,6 +21,11 @@ interface BlueprintViewerProps {
   executorMode: ExecutorMode;
   executorModel: string;
   onCopy: () => void;
+  onExport: (format: "md" | "json") => void;
+  checklist: { id: string; label: string }[];
+  completedSteps: string[];
+  onToggleStep: (id: string) => void;
+  onClearChecklist: () => void;
   onStream: () => void;
   onStop: () => void;
   streaming: boolean;
@@ -32,6 +39,11 @@ export function BlueprintViewer({
   executorMode,
   executorModel,
   onCopy,
+  onExport,
+  checklist,
+  completedSteps,
+  onToggleStep,
+  onClearChecklist,
   onStream,
   onStop,
   streaming,
@@ -78,12 +90,24 @@ export function BlueprintViewer({
 
       <div className="blueprint-layout">
         <main className="blueprint-main">
+          <GlassCard className="blueprint-checklist-card" delay={0.12}>
+            <div className="blueprint-checklist-heading"><div><div className="blueprint-aside-title"><CheckCircle2 size={15} aria-hidden="true" /> EXECUTION CHECKLIST</div><p>{completedSteps.length} of {checklist.length} steps complete</p></div><button type="button" className="quiet-action" onClick={onClearChecklist} disabled={!completedSteps.length}>Reset progress</button></div>
+            <div className="blueprint-checklist-progress" role="progressbar" aria-label="Blueprint checklist progress" aria-valuenow={completedSteps.length} aria-valuemin={0} aria-valuemax={checklist.length}><span style={{ width: `${checklist.length ? completedSteps.length / checklist.length * 100 : 0}%` }} /></div>
+            <ul className="blueprint-checklist-list">{checklist.map((step) => {
+              const complete = completedSteps.includes(step.id);
+              return <li key={step.id}><button type="button" className={complete ? "complete" : ""} aria-pressed={complete} onClick={() => onToggleStep(step.id)}>{complete ? <Check size={15} /> : <span className="blueprint-check-empty" />}<span>{step.label}</span></button></li>;
+            })}</ul>
+          </GlassCard>
           <GlassCard className="blueprint-prompt-card" delay={0.18}>
             <div className="blueprint-card-heading">
               <div className="blueprint-card-title"><FileText size={17} aria-hidden="true" /><div><span>MASTER PROMPT</span><h2>Ready for your execution agent</h2></div></div>
-              <button className="primary-button blueprint-copy-button" type="button" onClick={onCopy}>
-                <Copy size={15} aria-hidden="true" /> Copy blueprint
-              </button>
+              <div className="blueprint-actions">
+                <button className="secondary-button" type="button" onClick={() => onExport("md")}><FileText size={14} aria-hidden="true" /> Export .md</button>
+                <button className="secondary-button" type="button" onClick={() => onExport("json")}><FileJson size={14} aria-hidden="true" /> .json</button>
+                <button className="primary-button blueprint-copy-button" type="button" onClick={onCopy}>
+                  <Copy size={15} aria-hidden="true" /> Copy blueprint
+                </button>
+              </div>
             </div>
             <div className="blueprint-prompt-preview">
               <pre>{compiled.text}</pre>

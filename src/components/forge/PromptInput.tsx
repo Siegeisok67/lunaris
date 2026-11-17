@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ImagePlus, LoaderCircle, Paperclip, Send, Sparkles, X } from "lucide-react";
+import { ArrowUpRight, ImagePlus, LibraryBig, LoaderCircle, Paperclip, Search, Send, Sparkles, X } from "lucide-react";
 import { readImage } from "@tauri-apps/plugin-clipboard-manager";
 import type { ReferenceImage } from "../../types/architect";
 import type { ProviderConfig } from "../../types/provider";
 import { GlassCard } from "../ui/GlassCard";
+import { PROMPT_TEMPLATES } from "../../data/promptTemplates";
 
 interface PromptInputProps {
   config: ProviderConfig;
@@ -85,12 +86,16 @@ export function PromptInput({ config, onStart }: PromptInputProps) {
   const [imageError, setImageError] = useState<string | null>(null);
   const [readingImage, setReadingImage] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [templateQuery, setTemplateQuery] = useState("");
+  const [templateCategory, setTemplateCategory] = useState("All");
   const fileInput = useRef<HTMLInputElement>(null);
   const starters = [
     { label: "Build an app", text: "Help me plan and build an app. Clarify the users, core workflow, visual direction, platform, and integrations before writing the implementation plan." },
     { label: "Create in Blender", text: "Help me create this in Blender. Clarify the subject, style, scale, scene contents, and how I want to review the result. Include relevant Blender tools and skills in the final plan." },
     { label: "Improve a design", text: "Help me improve this design. Review my reference images, identify the intended audience and mood, then clarify the most important changes and how I will judge the result." },
   ];
+  const visibleTemplates = PROMPT_TEMPLATES.filter((template) => (templateCategory === "All" || template.category === templateCategory) && `${template.title} ${template.description} ${template.prompt}`.toLowerCase().includes(templateQuery.trim().toLowerCase()));
 
   const addFiles = async (files: FileList | File[]) => {
     setImageError(null);
@@ -201,8 +206,17 @@ export function PromptInput({ config, onStart }: PromptInputProps) {
         {images.length >= 5 && <p className="inline-hint">Maximum of five reference images reached.</p>}
       </GlassCard>
 
-      <div className="prompt-starters" aria-label="Prompt starters"><span>NEED A STARTING POINT?</span>{starters.map((starter) => <button type="button" key={starter.label} onClick={() => setPrompt(starter.text)}>{starter.label}</button>)}</div>
+      <div className="prompt-starters" aria-label="Prompt starters"><span>NEED A STARTING POINT?</span>{starters.map((starter) => <button type="button" key={starter.label} onClick={() => setPrompt(starter.text)}>{starter.label}</button>)}<button type="button" className="template-gallery-launch" onClick={() => setTemplatesOpen(true)}><LibraryBig size={13} /> Browse templates</button></div>
       <div className="prompt-footnotes"><span>Works with coding, 3D, design, and research tasks</span><span>Nothing is sent until you start</span></div>
+      <AnimatePresence>
+        {templatesOpen && <motion.div className="template-gallery-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onMouseDown={(event) => { if (event.target === event.currentTarget) setTemplatesOpen(false); }}>
+          <motion.section className="template-gallery glass-card" role="dialog" aria-modal="true" aria-labelledby="template-gallery-title" initial={{ opacity: 0, y: 16, scale: 0.985 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 8, scale: 0.99 }}>
+            <header className="template-gallery-heading"><div><span className="settings-eyebrow">START WITH STRUCTURE</span><h2 id="template-gallery-title">Prompt templates</h2><p>Choose a starting point. You can edit it before Lunaris analyzes anything.</p></div><button className="settings-icon-button" aria-label="Close templates" onClick={() => setTemplatesOpen(false)}><X size={17} /></button></header>
+            <div className="template-gallery-tools"><label className="template-search"><Search size={15} /><input aria-label="Search prompt templates" value={templateQuery} onChange={(event) => setTemplateQuery(event.target.value)} placeholder="Search templates…" /></label><div className="template-categories">{["All", "Development", "Creative", "Workflow"].map((category) => <button key={category} className={templateCategory === category ? "active" : ""} aria-pressed={templateCategory === category} onClick={() => setTemplateCategory(category)}>{category}</button>)}</div></div>
+            <div className="template-gallery-grid">{visibleTemplates.map((template) => <button key={template.id} className="template-choice" onClick={() => { setPrompt(template.prompt); setTemplatesOpen(false); }}><span>{template.category}</span><strong>{template.title}</strong><small>{template.description}</small><i>Use template <ArrowUpRight size={13} /></i></button>)}{visibleTemplates.length === 0 && <p className="template-no-results">No templates match that search.</p>}</div>
+          </motion.section>
+        </motion.div>}
+      </AnimatePresence>
     </div>
   );
 }

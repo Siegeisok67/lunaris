@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import type { BackgroundMotion, BackgroundScene } from "../../types/provider";
 
 interface Star {
   homeX: number;
@@ -35,7 +36,7 @@ function makeStars(width: number, height: number): Star[] {
   });
 }
 
-export function CelestialBackground() {
+export function CelestialBackground({ scene, intensity, motion }: { scene: BackgroundScene; intensity: number; motion: BackgroundMotion }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -53,6 +54,8 @@ export function CelestialBackground() {
     let pointerX = -10_000;
     let pointerY = -10_000;
     let reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const still = motion === "still";
+    const strength = Math.max(0, Math.min(100, intensity)) / 100;
 
     const resize = () => {
       const bounds = canvas.getBoundingClientRect();
@@ -86,11 +89,14 @@ export function CelestialBackground() {
       const y = height * 0.2;
       const radius = Math.min(49, Math.max(33, width * 0.042));
       const distance = Math.hypot(pointerX - x, pointerY - y);
-      const near = reducedMotion ? 0 : Math.max(0, 1 - distance / 255);
+      if (scene !== "moonlit" && scene !== "eclipse") return;
+      const near = reducedMotion || motion === "reduced" ? 0 : Math.max(0, 1 - distance / 255);
+      const eclipse = scene === "eclipse";
+      const moonColor = eclipse ? "255, 191, 131" : "174, 221, 255";
 
       const glow = context.createRadialGradient(x, y, radius * 0.35, x, y, radius * (2.7 + near * 1.5));
-      glow.addColorStop(0, `rgba(174, 221, 255, ${0.055 + near * 0.13})`);
-      glow.addColorStop(0.35, `rgba(138, 170, 231, ${0.035 + near * 0.09})`);
+      glow.addColorStop(0, `rgba(${moonColor}, ${(0.055 + near * 0.13) * strength})`);
+      glow.addColorStop(0.35, `rgba(138, 170, 231, ${(0.035 + near * 0.09) * strength})`);
       glow.addColorStop(1, "rgba(128, 150, 220, 0)");
       context.fillStyle = glow;
       context.beginPath();
@@ -98,11 +104,11 @@ export function CelestialBackground() {
       context.fill();
 
       context.save();
-      context.shadowColor = `rgba(184, 221, 255, ${0.18 + near * 0.52})`;
+      context.shadowColor = `rgba(${moonColor}, ${(0.18 + near * 0.52) * strength})`;
       context.shadowBlur = 12 + near * 34;
       const surface = context.createRadialGradient(x - radius * 0.36, y - radius * 0.42, radius * 0.08, x, y, radius * 1.2);
-      surface.addColorStop(0, `rgba(237, 246, 255, ${0.75 + near * 0.2})`);
-      surface.addColorStop(0.58, `rgba(188, 211, 244, ${0.58 + near * 0.24})`);
+      surface.addColorStop(0, `rgba(${eclipse ? "255, 232, 205" : "237, 246, 255"}, ${(0.75 + near * 0.2) * strength})`);
+      surface.addColorStop(0.58, `rgba(${eclipse ? "244, 184, 133" : "188, 211, 244"}, ${(0.58 + near * 0.24) * strength})`);
       surface.addColorStop(1, `rgba(132, 158, 207, ${0.44 + near * 0.22})`);
       context.fillStyle = surface;
       context.beginPath();
@@ -110,7 +116,7 @@ export function CelestialBackground() {
       context.fill();
       context.restore();
 
-      context.fillStyle = `rgba(99, 127, 173, ${0.13 + near * 0.08})`;
+      context.fillStyle = `rgba(99, 127, 173, ${(0.13 + near * 0.08) * strength})`;
       context.beginPath();
       context.ellipse(x - radius * 0.28, y - radius * 0.12, radius * 0.16, radius * 0.1, -0.35, 0, Math.PI * 2);
       context.ellipse(x + radius * 0.3, y + radius * 0.29, radius * 0.22, radius * 0.13, 0.28, 0, Math.PI * 2);
@@ -124,8 +130,48 @@ export function CelestialBackground() {
       elapsed += delta;
       context.clearRect(0, 0, width, height);
 
+      if (scene === "aurora") {
+        context.save();
+        context.globalAlpha = strength * (reducedMotion || motion === "reduced" ? 0.2 : 0.38);
+        for (let band = 0; band < 3; band += 1) {
+          const y = height * (0.24 + band * 0.11);
+          const offset = reducedMotion || motion === "reduced" ? 0 : Math.sin(elapsed * 0.008 + band) * 24;
+          const gradient = context.createLinearGradient(width * 0.2, y, width, y + 105);
+          gradient.addColorStop(0, "rgba(38, 220, 176, 0)");
+          gradient.addColorStop(0.42, "rgba(46, 225, 188, .32)");
+          gradient.addColorStop(0.72, "rgba(134, 117, 255, .25)");
+          gradient.addColorStop(1, "rgba(50, 180, 200, 0)");
+          context.strokeStyle = gradient;
+          context.lineWidth = 54 - band * 10;
+          context.shadowColor = "rgba(88, 255, 219, .5)";
+          context.shadowBlur = 34;
+          context.beginPath();
+          context.moveTo(width * 0.08, y + offset);
+          context.bezierCurveTo(width * 0.32, y - 100 + offset, width * 0.56, y + 120 - offset, width * 0.96, y - 35 + offset);
+          context.stroke();
+        }
+        context.restore();
+      }
+
+      if (scene === "meteor" && !reducedMotion && motion !== "reduced") {
+        context.save();
+        context.globalAlpha = strength * 0.6;
+        for (let index = 0; index < 4; index += 1) {
+          const cycle = (elapsed * (0.19 + index * 0.027) + index * 197) % (width + height);
+          const x = width - cycle;
+          const y = cycle * 0.43 + index * 37;
+          const tail = context.createLinearGradient(x, y, x + 92, y - 46);
+          tail.addColorStop(0, "rgba(208, 237, 255, .7)");
+          tail.addColorStop(1, "rgba(158, 197, 255, 0)");
+          context.strokeStyle = tail;
+          context.lineWidth = 1.5;
+          context.beginPath(); context.moveTo(x, y); context.lineTo(x + 92, y - 46); context.stroke();
+        }
+        context.restore();
+      }
+
       for (const star of stars) {
-        if (!reducedMotion) {
+        if (!reducedMotion && motion === "system") {
           const dx = star.x - pointerX;
           const dy = star.y - pointerY;
           const distance = Math.hypot(dx, dy) || 1;
@@ -143,8 +189,8 @@ export function CelestialBackground() {
           star.y += star.velocityY * delta;
         }
 
-        const twinkle = reducedMotion ? 0.62 : 0.42 + (Math.sin(elapsed * 0.035 * star.speed + star.phase) + 1) * 0.29;
-        const alpha = star.opacity * twinkle;
+        const twinkle = reducedMotion || motion === "reduced" ? 0.62 : 0.42 + (Math.sin(elapsed * 0.035 * star.speed + star.phase) + 1) * 0.29;
+        const alpha = star.opacity * twinkle * strength * (scene === "quiet" ? 0.48 : 1);
         const haloRadius = star.radius * (4 + twinkle * 2.5);
         const halo = context.createRadialGradient(star.x, star.y, 0, star.x, star.y, haloRadius);
         halo.addColorStop(0, `hsla(${star.hue}, 92%, 89%, ${alpha * 0.72})`);
@@ -161,10 +207,13 @@ export function CelestialBackground() {
       }
 
       drawMoon();
-      animationFrame = window.requestAnimationFrame(render);
+      if (!still) animationFrame = window.requestAnimationFrame(render);
     };
 
-    const observer = new ResizeObserver(resize);
+    const observer = new ResizeObserver(() => {
+      resize();
+      if (still) render(performance.now());
+    });
     observer.observe(canvas.parentElement ?? canvas);
     window.addEventListener("pointermove", onPointerMove, { passive: true });
     motionQuery.addEventListener("change", onMotionChange);
@@ -177,7 +226,7 @@ export function CelestialBackground() {
       motionQuery.removeEventListener("change", onMotionChange);
       window.cancelAnimationFrame(animationFrame);
     };
-  }, []);
+  }, [scene, intensity, motion]);
 
-  return <div className="celestial-background" aria-hidden="true"><canvas ref={canvasRef} /></div>;
+  return <div className={`celestial-background scene-${scene} motion-${motion}`} aria-hidden="true" style={{ opacity: Math.max(0, Math.min(100, intensity)) / 100 }}><canvas ref={canvasRef} /></div>;
 }

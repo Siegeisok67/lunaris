@@ -66,6 +66,9 @@ export interface PromptSession {
   compiledPrompt: string;
   answerCount: number;
   skippedQuestions: boolean;
+  pinned?: boolean;
+  archived?: boolean;
+  completedChecklistSteps?: string[];
 }
 
 export const EMPTY_ARCHITECT_RESULT: ArchitectResult = {

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { AnimatePresence, motion } from "framer-motion";
 import { check as checkForUpdate } from "@tauri-apps/plugin-updater";
-import { ArrowUpRight, Clock3, Command, Moon, Plus, Sparkles, X } from "lucide-react";
+import { Archive, ArrowUpRight, Bookmark, Check, CheckCircle2, Clock3, Command, FileJson, FileText, Moon, Plus, Sparkles, Trash2, X } from "lucide-react";
 import { Titlebar } from "./components/layout/Titlebar";
 import { CelestialBackground } from "./components/layout/CelestialBackground";
 import { Sidebar, type NavigationPage } from "./components/layout/Sidebar";
@@ -35,7 +35,56 @@ const INITIAL_SETTINGS: LunarisSettings = {
   theme: "lunar",
   monitorResources: true,
   modelPreference: "balanced",
+  backgroundScene: "moonlit",
+  backgroundIntensity: 70,
+  backgroundMotion: "system",
 };
+
+interface ChecklistStep { id: string; label: string }
+
+function extractChecklist(text: string): ChecklistStep[] {
+  const lines = text.split(/\r?\n/);
+  const headingIndex = lines.findIndex((line) => /^#{1,4}\s*(execution plan|implementation plan|steps|action plan)/i.test(line.trim()));
+  const source = headingIndex >= 0 ? lines.slice(headingIndex + 1) : lines;
+  const candidates = source.map((line) => line.trim()).filter((line) => /^(?:\d{1,2}[.)]\s+|[-*]\s+\[[ x]\]\s+)/.test(line));
+  const extracted = candidates.slice(0, 16).map((line, index) => {
+    const label = line.replace(/^(?:\d{1,2}[.)]\s+|[-*]\s+\[[ x]\]\s+)/, "").replace(/\*\*/g, "").trim();
+    const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48);
+    return { id: `step-${index}-${slug || "task"}`, label };
+  }).filter((step) => step.label.length > 0);
+  return extracted.length ? extracted : [{ id: "review-blueprint", label: "Review the blueprint and begin with the first action" }];
+}
+
+function safeFilename(value: string): string {
+  return value.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "-").replace(/\s+/g, " ").trim().slice(0, 72) || "lunaris-blueprint";
+}
+
+function exportSession(session: PromptSession, format: "md" | "json") {
+  const payload = {
+    title: session.title,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+    prompt: session.prompt,
+    knownSpecs: session.result?.known_specs ?? {},
+    answers: session.answers,
+    detectedSkills: session.result?.detected_skills ?? [],
+    detectedTools: session.result?.detected_tools ?? [],
+    compiledPrompt: session.compiledPrompt,
+    completedChecklistSteps: session.completedChecklistSteps ?? [],
+  };
+  const content = format === "json"
+    ? JSON.stringify(payload, null, 2)
+    : `# ${payload.title}\n\nCreated: ${payload.createdAt}\nUpdated: ${payload.updatedAt}\n\n## Original request\n\n${payload.prompt}\n\n## Known specifications\n\n\`\`\`json\n${JSON.stringify(payload.knownSpecs, null, 2)}\n\`\`\`\n\n## Clarifications\n\n${payload.answers.length ? payload.answers.map((answer) => `- **${answer.questionText || answer.questionId}:** ${answer.answer}`).join("\n") : "No clarification answers."}\n\n## Included skills and tools\n\n- Skills: ${payload.detectedSkills.join(", ") || "None"}\n- Tools: ${payload.detectedTools.join(", ") || "None"}\n\n## Compiled blueprint\n\n${payload.compiledPrompt}\n`;
+  const blob = new Blob([content], { type: format === "json" ? "application/json;charset=utf-8" : "text/markdown;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `${safeFilename(session.title)}.${format}`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : typeof error === "string" ? error : "Something went wrong.";
@@ -88,6 +137,7 @@ export default function App() {
   const [skills, setSkills] = useState<SkillDefinition[]>([]);
   const [history, setHistory] = useState<PromptSession[]>([]);
   const [historyQuery, setHistoryQuery] = useState("");
+  const [historyFilter, setHistoryFilter] = useState<"active" | "archived">("active");
   const [images, setImages] = useState<ReferenceImage[]>([]);
   const [stagedHandoffPaths, setStagedHandoffPaths] = useState<string[] | null>(null);
   const [initialized, setInitialized] = useState(false);
@@ -220,6 +270,9 @@ export default function App() {
         compiledPrompt: compiled.text,
         answerCount: loop.state.answers.length,
         skippedQuestions: loop.state.skippedQuestions,
+        pinned: prior?.pinned,
+        archived: prior?.archived,
+        completedChecklistSteps: prior?.completedChecklistSteps ?? [],
       };
       return [session, ...current.filter((item) => item.id !== id)].slice(0, 250);
     });
@@ -265,7 +318,7 @@ export default function App() {
     setPage("forge");
   };
 
-  const saveProviderSettings = async (providers: ProviderSettingsType, appearance: { theme: LunarisSettings["theme"]; monitorResources: boolean }) => {
+  const saveProviderSettings = async (providers: ProviderSettingsType, appearance: Pick<LunarisSettings, "theme" | "monitorResources" | "backgroundScene" | "backgroundIntensity" | "backgroundMotion">) => {
     const next: LunarisSettings = { ...settings, providers, ...appearance };
     await saveSettings(next);
     setSettings(next);
@@ -305,6 +358,43 @@ export default function App() {
     const model = modelRequest?.model;
     if (model) dismissedModelRequests.current.add(`${sessionId.current ?? loop.state.originalPrompt}:${model}`);
     setModelRequest(null);
+  };
+
+  const toggleSessionFlag = (id: string, field: "pinned" | "archived") => {
+    setHistory((current) => current.map((session) => session.id === id ? { ...session, [field]: !session[field] } : session));
+  };
+
+  const removeSession = (session: PromptSession) => {
+    if (!window.confirm(`Delete “${session.title}” from prompt history? This cannot be undone.`)) return;
+    setHistory((current) => current.filter((item) => item.id !== session.id));
+    if (sessionId.current === session.id) newPrompt();
+  };
+
+  const currentSessionForExport = (): PromptSession | null => {
+    if (!displayedCompiled || !loop.state.result) return null;
+    const existing = history.find((session) => session.id === sessionId.current);
+    return existing ?? {
+      id: sessionId.current ?? crypto.randomUUID(), title: shortTitle(loop.state.originalPrompt), createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      prompt: loop.state.originalPrompt, result: loop.state.result, answers: loop.state.answers, compiledPrompt: displayedCompiled.text,
+      answerCount: loop.state.answers.length, skippedQuestions: loop.state.skippedQuestions,
+    };
+  };
+
+  const checklist = useMemo(() => displayedCompiled ? extractChecklist(displayedCompiled.text) : [], [displayedCompiled?.text]);
+  const completedChecklistSteps = history.find((session) => session.id === sessionId.current)?.completedChecklistSteps ?? [];
+  const toggleChecklistStep = (stepId: string) => {
+    const id = sessionId.current;
+    if (!id) return;
+    setHistory((current) => current.map((session) => {
+      if (session.id !== id) return session;
+      const completed = new Set(session.completedChecklistSteps ?? []);
+      if (completed.has(stepId)) completed.delete(stepId); else completed.add(stepId);
+      return { ...session, completedChecklistSteps: [...completed] };
+    }));
+  };
+  const clearChecklist = () => {
+    const id = sessionId.current;
+    if (id) setHistory((current) => current.map((session) => session.id === id ? { ...session, completedChecklistSteps: [] } : session));
   };
 
   const copyPrompt = async () => {
@@ -406,11 +496,16 @@ export default function App() {
     else setPage(target);
   };
 
+  const visibleHistory = useMemo(() => history
+    .filter((session) => Boolean(session.archived) === (historyFilter === "archived"))
+    .filter((session) => `${session.title} ${session.prompt} ${session.compiledPrompt}`.toLowerCase().includes(historyQuery.trim().toLowerCase()))
+    .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || Date.parse(b.updatedAt) - Date.parse(a.updatedAt)), [history, historyFilter, historyQuery]);
+
   return (
     <div className="app-shell">
       <Titlebar />
       <div className="app-body">
-        <CelestialBackground />
+        <CelestialBackground scene={settings.backgroundScene} intensity={settings.backgroundIntensity} motion={settings.backgroundMotion} />
         <Sidebar page={page} history={history} settings={settings.providers} onNavigate={navigate} onOpenSession={openSession} resources={resources.snapshot} resourceError={resources.error} monitorResources={settings.monitorResources} onRefreshResources={resources.refresh} />
         <main className="main-workspace">
           <AnimatePresence mode="wait">
@@ -422,15 +517,24 @@ export default function App() {
             ) : page === "history" ? (
               <motion.div key="history" className="history-page page-content" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={motionTransitions.page}>
                 <div className="page-title-row"><div><div className="eyebrow left">YOUR WORK</div><h1>Prompt history</h1><p>Reopen a blueprint and send it to your next tool.</p></div><button className="secondary-button" onClick={newPrompt}><Plus size={15} /> New prompt</button></div>
-                {history.length > 0 && <input className="history-search" aria-label="Search prompt history" placeholder="Search titles and prompts…" value={historyQuery} onChange={(event) => setHistoryQuery(event.target.value)} />}
-                {history.length ? (history.filter((session) => `${session.title} ${session.prompt}`.toLowerCase().includes(historyQuery.trim().toLowerCase())).length ? <div className="history-grid">{history.filter((session) => `${session.title} ${session.prompt}`.toLowerCase().includes(historyQuery.trim().toLowerCase())).map((session) => (
-                  <button key={session.id} className="history-card glass-card" onClick={() => openSession(session)}>
-                    <span className="history-card-date"><Clock3 size={13} /> {new Date(session.updatedAt).toLocaleDateString()}</span>
-                    <strong>{session.title}</strong>
-                    <span className="history-card-preview">{session.prompt}</span>
-                    <span className="history-card-footer">{session.answerCount} clarifications <ArrowUpRight size={15} /></span>
-                  </button>
-                ))}</div> : <div className="history-empty glass-card"><h2>No matching prompts</h2><p>Try a different search.</p></div>) : <div className="history-empty glass-card"><Sparkles size={22} /><h2>No blueprints yet</h2><p>Your compiled prompts will appear here after your first run.</p><button className="primary-button" onClick={newPrompt}>Create a prompt <ArrowUpRight size={14} /></button></div>}
+                {history.length > 0 && <div className="history-toolbar"><input className="history-search" aria-label="Search prompt history" placeholder="Search titles, prompts, and blueprints…" value={historyQuery} onChange={(event) => setHistoryQuery(event.target.value)} /><div className="settings-segmented" role="group" aria-label="History filter"><button className={historyFilter === "active" ? "active" : ""} aria-pressed={historyFilter === "active"} onClick={() => setHistoryFilter("active")}>Active</button><button className={historyFilter === "archived" ? "active" : ""} aria-pressed={historyFilter === "archived"} onClick={() => setHistoryFilter("archived")}>Archived</button></div></div>}
+                {history.length ? (visibleHistory.length ? <div className="history-grid">{visibleHistory.map((session) => (
+                  <article key={session.id} className="history-card-shell glass-card">
+                    <button className="history-card-open" onClick={() => openSession(session)}>
+                      <span className="history-card-date"><Clock3 size={13} /> {new Date(session.updatedAt).toLocaleDateString()} {session.pinned && <span className="history-pinned-label"><Bookmark size={11} fill="currentColor" /> PINNED</span>}</span>
+                      <strong>{session.title}</strong>
+                      <span className="history-card-preview">{session.prompt}</span>
+                      <span className="history-card-footer">{session.answerCount} clarifications <ArrowUpRight size={15} /></span>
+                    </button>
+                    <div className="history-card-actions">
+                      <button title={session.pinned ? "Unpin prompt" : "Pin prompt"} aria-label={session.pinned ? "Unpin prompt" : "Pin prompt"} onClick={() => toggleSessionFlag(session.id, "pinned")}><Bookmark size={13} fill={session.pinned ? "currentColor" : "none"} />{session.pinned ? "Pinned" : "Pin"}</button>
+                      <button title={session.archived ? "Restore prompt" : "Archive prompt"} onClick={() => toggleSessionFlag(session.id, "archived")}><Archive size={13} />{session.archived ? "Restore" : "Archive"}</button>
+                      <button title="Export Markdown" aria-label={`Export ${session.title} as Markdown`} onClick={() => exportSession(session, "md")}><FileText size={13} />MD</button>
+                      <button title="Export JSON" aria-label={`Export ${session.title} as JSON`} onClick={() => exportSession(session, "json")}><FileJson size={13} />JSON</button>
+                      <button className="history-delete-action" title="Delete prompt" aria-label={`Delete ${session.title}`} onClick={() => removeSession(session)}><Trash2 size={13} /></button>
+                    </div>
+                  </article>
+                ))}</div> : <div className="history-empty glass-card"><h2>{historyFilter === "archived" ? "No archived prompts" : "No matching prompts"}</h2><p>{historyFilter === "archived" ? "Archive a prompt to keep it out of your active list." : "Try another search or check the archived list."}</p></div>) : <div className="history-empty glass-card"><Sparkles size={22} /><h2>No blueprints yet</h2><p>Your compiled prompts will appear here after your first run.</p><button className="primary-button" onClick={newPrompt}>Create a prompt <ArrowUpRight size={14} /></button></div>}
               </motion.div>
             ) : page === "skills" ? (
               <motion.div key="skills" className="skills-page" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -7 }} transition={motionTransitions.page}>
@@ -446,7 +550,7 @@ export default function App() {
               </motion.div>
             ) : loop.state.status === "ready" && displayedCompiled ? (
               <motion.div key="blueprint" className="blueprint-page page-content" initial={{ opacity: 0, y: 9, filter: "blur(2px)" }} animate={{ opacity: 1, y: 0, filter: "blur(0px)" }} exit={{ opacity: 0, y: -8 }} transition={motionTransitions.page}>
-                <BlueprintViewer compiled={displayedCompiled} executorMode={settings.providers.executorMode} executorModel={settings.providers.executor.model} onCopy={copyPrompt} onStream={() => void startStream()} onStop={stopStream} streaming={streaming} executorText={executorText} streamError={streamError} onNewPrompt={newPrompt} />
+                <BlueprintViewer compiled={displayedCompiled} executorMode={settings.providers.executorMode} executorModel={settings.providers.executor.model} checklist={checklist} completedSteps={completedChecklistSteps} onToggleStep={toggleChecklistStep} onClearChecklist={clearChecklist} onCopy={copyPrompt} onExport={(format) => { const session = currentSessionForExport(); if (session) exportSession(session, format); }} onStream={() => void startStream()} onStop={stopStream} streaming={streaming} executorText={executorText} streamError={streamError} onNewPrompt={newPrompt} />
               </motion.div>
             ) : (
               <motion.div key="clarification" className="clarification-page page-content" initial={{ opacity: 0, y: 9, filter: "blur(2px)" }} animate={{ opacity: 1, y: 0, filter: "blur(0px)" }} exit={{ opacity: 0, y: -8 }} transition={motionTransitions.page}>
@@ -459,7 +563,7 @@ export default function App() {
         </main>
       </div>
       <AnimatePresence>
-        {settingsOpen && <ProviderSettings settings={settings.providers} theme={settings.theme} monitorResources={settings.monitorResources} onSave={saveProviderSettings} onClose={() => setSettingsOpen(false)} />}
+        {settingsOpen && <ProviderSettings settings={settings.providers} theme={settings.theme} monitorResources={settings.monitorResources} backgroundScene={settings.backgroundScene} backgroundIntensity={settings.backgroundIntensity} backgroundMotion={settings.backgroundMotion} onSave={saveProviderSettings} onClose={() => setSettingsOpen(false)} />}
       </AnimatePresence>
       <AnimatePresence>
         {modelRequest && <ModelChangeRequest recommendation={modelRequest} currentModel={settings.providers.executor.model} runtime={settings.providers.executor.provider === "custom" ? "custom" : "ollama"} baseUrl={settings.providers.executor.provider === "custom" ? settings.providers.executor.baseUrl : settings.providers.executor.provider === "ollama" ? settings.providers.executor.baseUrl : settings.providers.architect.provider === "ollama" ? settings.providers.architect.baseUrl : "http://localhost:11434"} onAccept={acceptModelRequest} onDismiss={dismissModelRequest} />}

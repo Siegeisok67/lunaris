@@ -49,6 +49,8 @@ import {
   type ProviderConfig,
 
   type AppTheme,
+  type BackgroundMotion,
+  type BackgroundScene,
 
   type ProviderId,
 
@@ -67,8 +69,10 @@ interface ProviderSettingsProps {
   theme: AppTheme;
 
   monitorResources: boolean;
-
-  onSave: (settings: ProviderSettingsValue, appearance: { theme: AppTheme; monitorResources: boolean }) => Promise<void>;
+  backgroundScene: BackgroundScene;
+  backgroundIntensity: number;
+  backgroundMotion: BackgroundMotion;
+  onSave: (settings: ProviderSettingsValue, appearance: { theme: AppTheme; monitorResources: boolean; backgroundScene: BackgroundScene; backgroundIntensity: number; backgroundMotion: BackgroundMotion }) => Promise<void>;
 
   onClose: () => void;
 
@@ -720,7 +724,7 @@ function validateSettings(settings: ProviderSettingsValue): string | null {
 
 
 
-export function ProviderSettings({ settings, theme, monitorResources, onSave, onClose }: ProviderSettingsProps) {
+export function ProviderSettings({ settings, theme, monitorResources, backgroundScene, backgroundIntensity, backgroundMotion, onSave, onClose }: ProviderSettingsProps) {
 
   const [draft, setDraft] = useState<ProviderSettingsValue>(() => ({
 
@@ -739,6 +743,9 @@ export function ProviderSettings({ settings, theme, monitorResources, onSave, on
   const [themeDraft, setThemeDraft] = useState<AppTheme>(theme);
 
   const [monitorDraft, setMonitorDraft] = useState(monitorResources);
+  const [sceneDraft, setSceneDraft] = useState<BackgroundScene>(backgroundScene);
+  const [intensityDraft, setIntensityDraft] = useState(backgroundIntensity);
+  const [motionDraft, setMotionDraft] = useState<BackgroundMotion>(backgroundMotion);
 
 
 
@@ -749,8 +756,11 @@ export function ProviderSettings({ settings, theme, monitorResources, onSave, on
     setThemeDraft(theme);
 
     setMonitorDraft(monitorResources);
+    setSceneDraft(backgroundScene);
+    setIntensityDraft(backgroundIntensity);
+    setMotionDraft(backgroundMotion);
 
-  }, [settings, theme, monitorResources]);
+  }, [settings, theme, monitorResources, backgroundScene, backgroundIntensity, backgroundMotion]);
 
 
 
@@ -816,7 +826,7 @@ export function ProviderSettings({ settings, theme, monitorResources, onSave, on
 
       }
 
-      await onSave(next, { theme: themeDraft, monitorResources: monitorDraft });
+      await onSave(next, { theme: themeDraft, monitorResources: monitorDraft, backgroundScene: sceneDraft, backgroundIntensity: intensityDraft, backgroundMotion: motionDraft });
 
       document.documentElement.dataset.theme = themeDraft;
       onClose();
@@ -888,6 +898,16 @@ export function ProviderSettings({ settings, theme, monitorResources, onSave, on
 
 
         <section className="settings-general-card" aria-label="General and appearance settings">
+          <div className="settings-general-field background-studio-field">
+            <div><strong>Background Studio</strong><p>Pick the atmosphere behind your workspace. These settings are saved on this device.</p></div>
+            <div className="background-scene-grid" role="group" aria-label="Background scene">
+              {([['moonlit', 'Moonlit', 'Silver moon'], ['aurora', 'Aurora', 'Polar ribbons'], ['nebula', 'Nebula', 'Clouds of light'], ['meteor', 'Meteor shower', 'Falling stars'], ['eclipse', 'Eclipse', 'Amber corona'], ['quiet', 'Quiet space', 'Soft starfield']] as const).map(([value, label, subtitle]) => <button type="button" key={value} className={`background-scene-card scene-preview-${value} ${sceneDraft === value ? 'active' : ''}`} aria-pressed={sceneDraft === value} onClick={() => setSceneDraft(value)}><span className="background-scene-art" aria-hidden="true" /><strong>{label}</strong><small>{subtitle}</small></button>)}
+            </div>
+          </div>
+          <div className="settings-general-field background-control-row">
+            <label className="settings-temperature-field"><span>Ambient intensity <strong>{intensityDraft}%</strong></span><input type="range" min="0" max="100" step="1" value={intensityDraft} onChange={(event) => setIntensityDraft(Number(event.target.value))} /></label>
+            <label className="settings-field background-motion-select"><span>Motion</span><select value={motionDraft} onChange={(event) => setMotionDraft(event.target.value as BackgroundMotion)}><option value="system">Follow system preference</option><option value="reduced">Reduced motion</option><option value="still">Still background</option></select></label>
+          </div>
 
           <div className="settings-general-field">
 
