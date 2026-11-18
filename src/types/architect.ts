@@ -43,6 +43,8 @@ export interface BlueprintRevision {
 
 export interface ArchitectResult {
   known_specs: SpecSheet;
+  /** Unconfirmed choices or facts that must stay visibly separate from user-stated specs. */
+  assumptions?: string[];
   detected_skills: string[];
   detected_tools?: string[];
   is_ready_to_execute: boolean;
@@ -114,6 +116,7 @@ export interface PromptSession {
 
 export const EMPTY_ARCHITECT_RESULT: ArchitectResult = {
   known_specs: {},
+  assumptions: [],
   detected_skills: [],
   is_ready_to_execute: false,
   next_questions: [],

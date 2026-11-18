@@ -244,6 +244,9 @@ export function validateArchitectResult(input: unknown): ArchitectResult {
     : null;
   return {
     known_specs: readSpecSheet(input.known_specs),
+    assumptions: Array.isArray(input.assumptions)
+      ? input.assumptions.filter((item): item is string => typeof item === "string").map((item) => item.trim().slice(0, 600)).filter(Boolean).slice(0, 10)
+      : [],
     detected_skills: [...new Set(detected)],
     detected_tools: [...new Set(detectedTools)],
     is_ready_to_execute: ready,

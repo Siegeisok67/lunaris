@@ -53,14 +53,15 @@ export function compileExecutionPrompt(args: {
   const activeTools = selectToolReferences(toolCatalog, args.result.detected_tools, toolContext);
   const recordedAnswers = answerMap(args.answers);
   const unanswered = args.result.next_questions.filter((question) => !recordedAnswers.has(question.id));
-  const assumptions = unanswered.map((question) => {
+  const unansweredAssumptions = unanswered.map((question) => {
     const options = question.options?.length ? ` Choose the most suitable of ${question.options.join(", ")}.` : " Choose a conservative, reversible default.";
     return `${question.question}${options}`;
   });
+  const assumptions = [...new Set([...(args.result.assumptions ?? []), ...unansweredAssumptions])].slice(0, 20);
 
   const answerSection = args.answers.length
     ? args.answers.map(({ questionId, questionText, answer }) => `- ${questionText || questionId}: ${answer}`).join("\n")
-    : "- No follow-up answers were needed.";
+    : "- No clarification answers have been recorded.";
   const skillCalls = activeSkills.length
     ? activeSkills.map((skill) => `- Invoke skill \`${skill.id}\` before its relevant work. If the Executor supports native skill activation, activate this ID; otherwise follow the complete embedded rules below.`).join("\n")
     : "- No specialized skill calls were selected.";
@@ -81,7 +82,7 @@ export function compileExecutionPrompt(args: {
   const plan = args.result.final_execution_prompt.trim() || "Create a clear implementation plan, inspect the existing project before editing, and complete the work in small verifiable steps.";
   const assumptionSection = assumptions.length
     ? assumptions.map((assumption) => `- ${assumption}`).join("\n")
-    : "- No unresolved clarification questions.";
+    : "- No material open assumptions were identified; the Executor must still inspect the project and validate compatibility before relying on technical details.";
   const compileNote = args.skippedQuestions
     ? "The user chose to compile now. Treat unresolved details as assumptions, make safe reversible choices, and call those assumptions out in the result."
     : ""
@@ -91,7 +92,7 @@ export function compileExecutionPrompt(args: {
 ## Goal
 ${args.originalPrompt.trim()}
 
-## Known specifications
+## User-stated specifications
 ${formatSpecs(args.result.known_specs)}
 
 ${args.memoryContext?.trim() ? `## User-approved saved memory\n${args.memoryContext.trim()}\n` : ""}
@@ -102,7 +103,7 @@ ${answerSection}
 ## Reference material
 ${attachmentSection}
 
-## Assumptions to resolve while implementing
+## Unconfirmed assumptions and open decisions
 ${assumptionSection}
 
 ## Matched technical skills

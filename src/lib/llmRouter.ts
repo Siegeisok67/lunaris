@@ -36,6 +36,7 @@ const ARCHITECT_JSON_SCHEMA = {
         ],
       },
     },
+    assumptions: { type: "array", items: { type: "string" }, maxItems: 10 },
     detected_skills: { type: "array", items: { type: "string" }, maxItems: 40 },
     detected_tools: { type: "array", items: { type: "string" }, maxItems: 80 },
     executor_recommendation: {
@@ -84,7 +85,7 @@ const ARCHITECT_JSON_SCHEMA = {
       },
     },
   },
-  required: ["known_specs", "detected_skills", "detected_tools", "executor_recommendation", "context_recommendation", "is_ready_to_execute", "next_questions", "final_execution_prompt"],
+  required: ["known_specs", "assumptions", "detected_skills", "detected_tools", "executor_recommendation", "context_recommendation", "is_ready_to_execute", "next_questions", "final_execution_prompt"],
   additionalProperties: false,
 };
 
