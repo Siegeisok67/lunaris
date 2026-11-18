@@ -151,6 +151,7 @@ export default function App() {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [includeMemory, setIncludeMemory] = useState(true);
   const [history, setHistory] = useState<PromptSession[]>([]);
+  const [selectedHistoryIds, setSelectedHistoryIds] = useState<Set<string>>(new Set());
   const [historyQuery, setHistoryQuery] = useState("");
   const [historyFilter, setHistoryFilter] = useState<"active" | "archived">("active");
   const [images, setImages] = useState<ReferenceImage[]>([]);
@@ -763,6 +764,29 @@ export default function App() {
     .filter((session) => `${session.title} ${session.prompt} ${session.compiledPrompt}`.toLowerCase().includes(historyQuery.trim().toLowerCase()))
     .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || Date.parse(b.updatedAt) - Date.parse(a.updatedAt)), [history, historyFilter, historyQuery]);
 
+  const visibleHistorySelectionCount = visibleHistory.filter((session) => selectedHistoryIds.has(session.id)).length;
+  const allVisibleHistorySelected = visibleHistory.length > 0 && visibleHistorySelectionCount === visibleHistory.length;
+  const toggleHistorySelection = (id: string) => setSelectedHistoryIds((current) => {
+    const next = new Set(current);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const toggleVisibleHistorySelection = () => setSelectedHistoryIds((current) => {
+    const next = new Set(current);
+    if (allVisibleHistorySelected) visibleHistory.forEach((session) => next.delete(session.id));
+    else visibleHistory.forEach((session) => next.add(session.id));
+    return next;
+  });
+  const deleteSelectedHistory = () => {
+    const targets = history.filter((session) => selectedHistoryIds.has(session.id));
+    if (!targets.length) return;
+    if (!window.confirm(`Delete ${targets.length} selected prompt${targets.length === 1 ? "" : "s"}? This cannot be undone.`)) return;
+    const deletedIds = new Set(targets.map((session) => session.id));
+    setHistory((current) => current.filter((session) => !deletedIds.has(session.id)));
+    setSelectedHistoryIds(new Set());
+    if (sessionId.current && deletedIds.has(sessionId.current)) newPrompt();
+  };
+
   return (
     <div className="app-shell">
       <Titlebar />
@@ -779,7 +803,10 @@ export default function App() {
             ) : page === "history" ? (
               <motion.div key="history" className="history-page page-content" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={motionTransitions.page}>
                 <div className="page-title-row"><div><div className="eyebrow left">YOUR WORK</div><h1>Prompt history</h1><p>Reopen a blueprint and send it to your next tool.</p></div><button className="secondary-button" onClick={newPrompt}><Plus size={15} /> New prompt</button></div>
-                {history.length > 0 && <div className="history-toolbar"><input className="history-search" aria-label="Search prompt history" placeholder="Search titles, prompts, and blueprints…" value={historyQuery} onChange={(event) => setHistoryQuery(event.target.value)} /><div className="settings-segmented" role="group" aria-label="History filter"><button className={historyFilter === "active" ? "active" : ""} aria-pressed={historyFilter === "active"} onClick={() => setHistoryFilter("active")}>Active</button><button className={historyFilter === "archived" ? "active" : ""} aria-pressed={historyFilter === "archived"} onClick={() => setHistoryFilter("archived")}>Archived</button></div></div>}
+                {history.length > 0 && <>
+                  <div className="history-toolbar"><input className="history-search" aria-label="Search prompt history" placeholder="Search titles, prompts, and blueprints…" value={historyQuery} onChange={(event) => setHistoryQuery(event.target.value)} /><div className="settings-segmented" role="group" aria-label="History filter"><button className={historyFilter === "active" ? "active" : ""} aria-pressed={historyFilter === "active"} onClick={() => setHistoryFilter("active")}>Active</button><button className={historyFilter === "archived" ? "active" : ""} aria-pressed={historyFilter === "archived"} onClick={() => setHistoryFilter("archived")}>Archived</button></div></div>
+                  <div className="history-bulk-toolbar"><span>{selectedHistoryIds.size} selected</span><button type="button" onClick={toggleVisibleHistorySelection} disabled={!visibleHistory.length}>{allVisibleHistorySelected ? "Clear visible" : "Select visible"}</button>{selectedHistoryIds.size > 0 && <button type="button" onClick={() => setSelectedHistoryIds(new Set())}>Clear selection</button>}<button type="button" className="history-bulk-delete" onClick={deleteSelectedHistory} disabled={!selectedHistoryIds.size}><Trash2 size={13} /> Delete selected</button></div>
+                </>}
                 {history.length ? (visibleHistory.length ? <div className="history-grid">{visibleHistory.map((session) => (
                   <article key={session.id} className="history-card-shell glass-card">
                     <button className="history-card-open" onClick={() => openSession(session)}>
@@ -789,6 +816,7 @@ export default function App() {
                       <span className="history-card-footer">{session.answerCount} clarifications <ArrowUpRight size={15} /></span>
                     </button>
                     <div className="history-card-actions">
+                      <label className="history-card-select"><input type="checkbox" checked={selectedHistoryIds.has(session.id)} onChange={() => toggleHistorySelection(session.id)} aria-label={`Select ${session.title}`} /><span>Select</span></label>
                       <button title={session.pinned ? "Unpin prompt" : "Pin prompt"} aria-label={session.pinned ? "Unpin prompt" : "Pin prompt"} onClick={() => toggleSessionFlag(session.id, "pinned")}><Bookmark size={13} fill={session.pinned ? "currentColor" : "none"} />{session.pinned ? "Pinned" : "Pin"}</button>
                       <button title={session.archived ? "Restore prompt" : "Archive prompt"} onClick={() => toggleSessionFlag(session.id, "archived")}><Archive size={13} />{session.archived ? "Restore" : "Archive"}</button>
                       <button title="Export Markdown" aria-label={`Export ${session.title} as Markdown`} onClick={() => exportSession(session, "md")}><FileText size={13} />MD</button>
