@@ -66,6 +66,9 @@ export function SkillManager({ onChanged, onClose }: SkillManagerProps) {
   const [idTouched, setIdTouched] = useState(false);
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<SkillCategory | "all">("all");
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkCategory, setBulkCategory] = useState<SkillCategory | "keep">("keep");
+  const [bulkTriggersInput, setBulkTriggersInput] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -308,6 +311,110 @@ export function SkillManager({ onChanged, onClose }: SkillManagerProps) {
     (categoryFilter === "all" || skill.category === categoryFilter) &&
     (!query || `${skill.name} ${skill.description} ${skill.id} ${skill.triggers.join(" ")}`.toLowerCase().includes(query))
   );
+  const visibleSelectedCount = visibleSkills.filter((skill) => selectedIds.has(skill.id)).length;
+  const allVisibleSelected = visibleSkills.length > 0 && visibleSelectedCount === visibleSkills.length;
+
+  const toggleSkillSelection = (id: string) => setSelectedIds((current) => {
+    const next = new Set(current);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
+  const toggleVisibleSelection = () => setSelectedIds((current) => {
+    const next = new Set(current);
+    if (allVisibleSelected) visibleSkills.forEach((skill) => next.delete(skill.id));
+    else visibleSkills.forEach((skill) => next.add(skill.id));
+    return next;
+  });
+
+  const refreshAfterBulkChange = async () => {
+    const loaded = await loadSkills();
+    setSkills(loaded);
+    onChanged(loaded);
+    const current = loaded.find((skill) => skill.id === selectedId);
+    if (dirty && creating) {
+      const next = current ?? loaded[0];
+      setSelectedId(next?.id ?? null);
+      setDraft(next ? { ...next, triggers: [...next.triggers] } : null);
+      setTriggersInput(next?.triggers.join(", ") ?? "");
+      setCreating(false);
+      setIdTouched(false);
+    } else if (current && !creating) {
+      setDraft({ ...current, triggers: [...current.triggers] });
+      setTriggersInput(current.triggers.join(", "));
+    } else if (selectedId && !current) {
+      const next = loaded[0];
+      setSelectedId(next?.id ?? null);
+      setDraft(next ? { ...next, triggers: [...next.triggers] } : null);
+      setTriggersInput(next?.triggers.join(", ") ?? "");
+    }
+  };
+
+  const bulkUpdate = async (change: (skill: SkillDefinition) => SkillDefinition, success: string) => {
+    const targets = skills.filter((skill) => selectedIds.has(skill.id));
+    if (!targets.length || busy) return;
+    if (dirty && !window.confirm("Apply this bulk change to saved skills and discard the unsaved editor draft?")) return;
+    const files = targets.map((skill) => toSkillFile(change(skill)));
+    if (files.some((file) => new TextEncoder().encode(file.content).length > MAX_SKILL_BYTES)) {
+      setError("A bulk update would exceed the 512 KB limit for at least one skill. No changes were saved.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    let saved = 0;
+    try {
+      for (const file of files) { await saveSkillFile(file); saved += 1; }
+      await refreshAfterBulkChange();
+      setSelectedIds(new Set());
+      setMessage(`${saved} skills ${success}.`);
+    } catch (caught) {
+      try { await refreshAfterBulkChange(); } catch { /* Keep the current list if refresh also fails. */ }
+      setError(`Bulk update stopped after saving ${saved} of ${targets.length} skills: ${errorMessage(caught)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const applyBulkCategory = () => {
+    if (bulkCategory === "keep") return;
+    void bulkUpdate((skill) => ({ ...skill, category: bulkCategory }), `moved to ${bulkCategory}`);
+  };
+
+  const applyBulkTriggers = (mode: "add" | "remove") => {
+    const requested = parseTriggers(bulkTriggersInput).slice(0, 50);
+    if (!requested.length) { setError("Enter one or more comma-separated triggers first."); return; }
+    void bulkUpdate((skill) => {
+      const current = skill.triggers;
+      const triggers = mode === "add"
+        ? [...current, ...requested.filter((trigger) => !current.some((item) => item.toLocaleLowerCase() === trigger.toLocaleLowerCase()))]
+        : current.filter((trigger) => !requested.some((item) => item.toLocaleLowerCase() === trigger.toLocaleLowerCase()));
+      return { ...skill, triggers: triggers.slice(0, 100) };
+    }, mode === "add" ? "updated with the selected triggers" : "had the selected triggers removed");
+  };
+
+  const deleteSelected = async () => {
+    const targets = skills.filter((skill) => selectedIds.has(skill.id));
+    if (!targets.length || busy) return;
+    const draftNote = dirty ? " Any unsaved editor changes will also be discarded." : "";
+    if (!window.confirm(`Delete ${targets.length} selected skill${targets.length === 1 ? "" : "s"} from this device? This cannot be undone.${draftNote}`)) return;
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    let deleted = 0;
+    try {
+      for (const skill of targets) { await deleteSkillFile(skill.id); deleted += 1; }
+      await refreshAfterBulkChange();
+      setSelectedIds(new Set());
+      setMessage(`Deleted ${deleted} selected skill${deleted === 1 ? "" : "s"}.`);
+    } catch (caught) {
+      setSelectedIds(new Set(targets.slice(deleted).map((skill) => skill.id)));
+      try { await refreshAfterBulkChange(); } catch { /* Keep the current list if refresh also fails. */ }
+      setError(`Bulk delete stopped after deleting ${deleted} of ${targets.length} skills: ${errorMessage(caught)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <motion.div className="skills-page" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 8 }} transition={motionTransitions.page}>
@@ -340,20 +447,30 @@ export function SkillManager({ onChanged, onClose }: SkillManagerProps) {
               {CATEGORIES.map((category) => <option key={category} value={category}>{category[0].toUpperCase() + category.slice(1)}</option>)}
             </select>
           </label>
-          <div className="skills-list-count">{visibleSkills.length} of {skills.length} skills</div>
+          <div className="skills-list-count skills-selection-toolbar"><span>{visibleSkills.length} of {skills.length} skills · {selectedIds.size} selected</span><button type="button" onClick={toggleVisibleSelection} disabled={loading || busy || !visibleSkills.length}>{allVisibleSelected ? "Clear visible" : "Select visible"}</button>{selectedIds.size > 0 && <button type="button" onClick={() => setSelectedIds(new Set())} disabled={busy}>Clear all</button>}</div>
+          {selectedIds.size > 0 && <section className="skills-bulk-panel" aria-label="Bulk skill actions">
+            <strong>Bulk edit · {selectedIds.size} selected</strong>
+            <div className="skills-bulk-category"><select aria-label="Set selected skills category" value={bulkCategory} onChange={(event) => setBulkCategory(event.target.value as SkillCategory | "keep")}><option value="keep">Keep category</option>{CATEGORIES.map((category) => <option key={category} value={category}>Set {category}</option>)}</select><button type="button" className="secondary-button" onClick={applyBulkCategory} disabled={busy || dirty || bulkCategory === "keep"}>Apply</button></div>
+            <input className="skills-bulk-triggers" value={bulkTriggersInput} onChange={(event) => setBulkTriggersInput(event.target.value.slice(0, 1200))} placeholder="Triggers, separated by commas" aria-label="Bulk skill triggers" />
+            <div className="skills-bulk-trigger-actions"><button type="button" className="secondary-button" onClick={() => applyBulkTriggers("add")} disabled={busy || dirty || !bulkTriggersInput.trim()}>Add triggers</button><button type="button" className="secondary-button" onClick={() => applyBulkTriggers("remove")} disabled={busy || dirty || !bulkTriggersInput.trim()}>Remove triggers</button></div>
+            {dirty && <small>Save or discard the open skill draft before editing several skills.</small>}
+            <button type="button" className="skills-bulk-delete" onClick={() => void deleteSelected()} disabled={busy}><Trash2 size={13} /> Delete selected</button>
+          </section>}
           <div className="skills-list-items">
             {loading && <div className="skills-list-empty"><LoaderCircle className="spin" size={18} /> Loading skills…</div>}
             {!loading && visibleSkills.map((skill) => (
-              <button
-                type="button"
-                key={skill.id}
-                className={`skills-list-item ${selectedId === skill.id && !creating ? "active" : ""}`}
-                onClick={() => choose(skill)}
-                aria-current={selectedId === skill.id && !creating ? "true" : undefined}
-              >
-                <span className="skills-list-icon"><BookOpen size={16} /></span>
-                <span className="skills-list-copy"><strong>{skill.name}</strong><small>{skill.description}</small><em>{skill.category}{skill.builtIn ? " · Starter" : " · Custom"}</em></span>
-              </button>
+              <div className="skills-list-row" key={skill.id}>
+                <input type="checkbox" className="skills-row-checkbox" checked={selectedIds.has(skill.id)} onChange={() => toggleSkillSelection(skill.id)} aria-label={`Select ${skill.name}`} />
+                <button
+                  type="button"
+                  className={`skills-list-item ${selectedId === skill.id && !creating ? "active" : ""}`}
+                  onClick={() => choose(skill)}
+                  aria-current={selectedId === skill.id && !creating ? "true" : undefined}
+                >
+                  <span className="skills-list-icon"><BookOpen size={16} /></span>
+                  <span className="skills-list-copy"><strong>{skill.name}</strong><small>{skill.description}</small><em>{skill.category}{skill.builtIn ? " · Starter" : " · Custom"}</em></span>
+                </button>
+              </div>
             ))}
             {!loading && visibleSkills.length === 0 && <div className="skills-list-empty">{skills.length ? "No skills match your search." : "Your library is empty. Create a skill to get started."}</div>}
           </div>

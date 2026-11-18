@@ -166,7 +166,6 @@ export function useClarificationLoop() {
         role: "architect",
         config: args.config,
         temperature: 0.2,
-        maxTokens: 1800,
       } as const;
       let result: ArchitectResult;
       try {

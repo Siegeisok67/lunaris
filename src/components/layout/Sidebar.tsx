@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { ArchiveRestore, Blocks, BrainCircuit, CircleHelp, Clock3, Command, Cpu, Layers3, Settings2, Sparkles, WandSparkles } from "lucide-react";
+import { ArchiveRestore, Blocks, BrainCircuit, CircleHelp, Clock3, Command, Cpu, Layers3, Settings2, Sparkles, Trash2, WandSparkles } from "lucide-react";
 import type { PromptSession } from "../../types/architect";
 import type { ProviderSettings } from "../../types/provider";
 import { ResourceWidget } from "./ResourceWidget";
@@ -12,6 +12,7 @@ interface SidebarProps {
   settings: ProviderSettings;
   onNavigate: (page: NavigationPage | "settings") => void;
   onOpenSession: (session: PromptSession) => void;
+  onDeleteSession: (session: PromptSession) => void;
   resources: import("../../types/provider").ResourceSnapshot | null;
   resourceError: string | null;
   monitorResources: boolean;
@@ -29,7 +30,7 @@ const navigation = [
   { id: "backup" as const, label: "Backup & Restore", icon: ArchiveRestore },
 ];
 
-export function Sidebar({ page, history, settings, onNavigate, onOpenSession, resources, resourceError, monitorResources, onRefreshResources }: SidebarProps) {
+export function Sidebar({ page, history, settings, onNavigate, onOpenSession, onDeleteSession, resources, resourceError, monitorResources, onRefreshResources }: SidebarProps) {
   const recent = [...history].sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || Date.parse(b.updatedAt) - Date.parse(a.updatedAt)).slice(0, 5);
   const provider = settings.architect.provider === "ollama" ? "Ollama local" : settings.architect.provider;
   return (
@@ -47,9 +48,12 @@ export function Sidebar({ page, history, settings, onNavigate, onOpenSession, re
       <div className="sidebar-history">
         <div className="sidebar-label-row"><p className="sidebar-label">RECENT PROMPTS</p><span>{history.length}</span></div>
         {recent.length ? recent.map((session) => (
-          <button className="history-link" key={session.id} onClick={() => onOpenSession(session)} title={session.title}>
-            <span className="history-dot" /><span>{session.pinned ? "★ " : ""}{session.title}</span>
-          </button>
+          <div className="recent-prompt-row" key={session.id}>
+            <button className="history-link" onClick={() => onOpenSession(session)} title={session.title}>
+              <span className="history-dot" /><span>{session.pinned ? "★ " : ""}{session.title}</span>
+            </button>
+            <button className="recent-prompt-delete" title={`Delete ${session.title}`} aria-label={`Delete recent prompt ${session.title}`} onClick={() => onDeleteSession(session)}><Trash2 size={12} /></button>
+          </div>
         )) : <p className="sidebar-empty">Your compiled prompts will appear here.</p>}
         {history.length > 5 && <button className="history-more" onClick={() => onNavigate("history")}>View all prompts</button>}
       </div>

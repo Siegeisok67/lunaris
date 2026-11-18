@@ -10,7 +10,7 @@ import type {
   ProviderRole,
   ProviderStreamEvent,
 } from "../types/provider";
-import { parseArchitectResult } from "./jsonRepair";
+import { ArchitectJsonError, parseArchitectResult } from "./jsonRepair";
 
 interface RustProviderRequest {
   requestId?: string;
@@ -36,7 +36,7 @@ const ARCHITECT_JSON_SCHEMA = {
         ],
       },
     },
-    assumptions: { type: "array", items: { type: "string" }, maxItems: 10 },
+    assumptions: { type: "array", items: { type: "string", maxLength: 600 }, maxItems: 10 },
     detected_skills: { type: "array", items: { type: "string" }, maxItems: 40 },
     detected_tools: { type: "array", items: { type: "string" }, maxItems: 80 },
     executor_recommendation: {
@@ -58,15 +58,15 @@ const ARCHITECT_JSON_SCHEMA = {
       items: {
         type: "object",
         properties: {
-          id: { type: "string" },
-          question: { type: "string" },
-          options: { type: "array", items: { type: "string" }, maxItems: 8 },
+          id: { type: "string", maxLength: 80 },
+          question: { type: "string", maxLength: 600 },
+          options: { type: "array", items: { type: "string", maxLength: 160 }, maxItems: 5 },
         },
         required: ["id", "question"],
         additionalProperties: false,
       },
     },
-    final_execution_prompt: { type: "string" },
+    final_execution_prompt: { type: "string", maxLength: 5000 },
     workflow_stages: {
       type: "array",
       minItems: 3,
@@ -75,10 +75,10 @@ const ARCHITECT_JSON_SCHEMA = {
         type: "object",
         properties: {
           id: { type: "string" },
-          title: { type: "string" },
-          goal: { type: "string" },
-          deliverable: { type: "string" },
-          verification: { type: "string" },
+          title: { type: "string", maxLength: 100 },
+          goal: { type: "string", maxLength: 500 },
+          deliverable: { type: "string", maxLength: 400 },
+          verification: { type: "string", maxLength: 400 },
         },
         required: ["id", "title", "goal", "deliverable", "verification"],
         additionalProperties: false,
@@ -220,8 +220,28 @@ export async function completeText(options: ProviderRequestOptions): Promise<str
 }
 
 export async function evaluateArchitect(options: Omit<ProviderRequestOptions, "jsonMode">): Promise<ArchitectResult> {
-  const text = await completeText({ ...options, jsonMode: true, maxTokens: 1800 });
-  return parseArchitectResult(text);
+  const text = await completeText({ ...options, jsonMode: true, maxTokens: 2400 });
+  try {
+    return parseArchitectResult(text);
+  } catch (error) {
+    if (!(error instanceof ArchitectJsonError)) throw error;
+  }
+
+  const compactRetry = {
+    role: "user" as const,
+    content: "The previous response was incomplete or invalid JSON. Regenerate the complete response as one compact JSON object matching the required schema. Keep known_specs to at most 6 entries, assumptions to at most 4, ask at most 2 short questions, use exactly 4 concise workflow stages when applicable, and keep final_execution_prompt under 100 words. Do not use Markdown, explanations, or unescaped quotation marks inside strings.",
+  };
+  const retryText = await completeText({
+    ...options,
+    messages: [...options.messages, compactRetry],
+    jsonMode: true,
+    maxTokens: 2000,
+  });
+  try {
+    return parseArchitectResult(retryText);
+  } catch {
+    throw new ArchitectJsonError("The Architect returned incomplete JSON twice. It may be hitting the model's output limit; try a shorter request or a model with a larger output capacity.");
+  }
 }
 
 function extractDeltas(provider: ProviderId, block: string): string[] {

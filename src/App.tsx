@@ -768,7 +768,7 @@ export default function App() {
       <Titlebar />
       <div className="app-body">
         <CelestialBackground scene={settings.backgroundScene} intensity={settings.backgroundIntensity} motion={settings.backgroundMotion} />
-        <Sidebar page={page} history={history} settings={settings.providers} onNavigate={navigate} onOpenSession={openSession} resources={resources.snapshot} resourceError={resources.error} monitorResources={settings.monitorResources} onRefreshResources={resources.refresh} />
+        <Sidebar page={page} history={history} settings={settings.providers} onNavigate={navigate} onOpenSession={openSession} onDeleteSession={removeSession} resources={resources.snapshot} resourceError={resources.error} monitorResources={settings.monitorResources} onRefreshResources={resources.refresh} />
         <main className="main-workspace">
           <AnimatePresence mode="wait">
             {!initialized ? (
