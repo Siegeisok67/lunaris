@@ -19,6 +19,7 @@ import type { AnswerRecord } from "../../types/architect";
 import type { MemoryCollection, MemoryScope } from "../../types/memory";
 import type { ExecutorMode } from "../../types/provider";
 import { GlassCard } from "../ui/GlassCard";
+import { BlueprintPreflight } from "./BlueprintPreflight";
 
 interface BlueprintViewerProps {
   compiled: CompiledPrompt;
@@ -30,6 +31,7 @@ interface BlueprintViewerProps {
   completedSteps: string[];
   onToggleStep: (id: string) => void;
   onClearChecklist: () => void;
+  onCopyReview: (text: string) => void;
   answers: AnswerRecord[];
   memory: MemoryCollection;
   projectId: string | null;
@@ -53,6 +55,7 @@ export function BlueprintViewer({
   completedSteps,
   onToggleStep,
   onClearChecklist,
+  onCopyReview,
   answers,
   memory,
   projectId,
@@ -101,6 +104,8 @@ export function BlueprintViewer({
           <small>Potential executor tokens avoided if two revision passes are prevented.</small>
         </GlassCard>
       </div>
+
+      <BlueprintPreflight compiled={compiled} onCopyReview={onCopyReview} />
 
       <div className="blueprint-layout">
         <main className="blueprint-main">

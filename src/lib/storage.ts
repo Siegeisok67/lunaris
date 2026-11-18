@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { DEFAULT_SKILLS, defaultSkillFiles } from "../data/defaultSkills";
 import { DEFAULT_PROVIDER_SETTINGS, type AppTheme, type BackgroundMotion, type BackgroundScene, type ProviderSettings } from "../types/provider";
 import type { PromptSession } from "../types/architect";
+import type { PromptTemplate } from "../data/promptTemplates";
 import type { SkillDefinition, SkillFile } from "../types/skills";
 import { EMPTY_TOOL_CATALOG, type ToolCatalog } from "../types/tools";
 import { EMPTY_MEMORY, type MemoryCollection } from "../types/memory";
@@ -17,6 +18,7 @@ export interface LunarisSettings {
   backgroundScene: BackgroundScene;
   backgroundIntensity: number;
   backgroundMotion: BackgroundMotion;
+  customPromptTemplates: PromptTemplate[];
 }
 
 export interface HistoryCollection {
@@ -33,6 +35,7 @@ const DEFAULT_SETTINGS: LunarisSettings = {
   backgroundScene: "moonlit",
   backgroundIntensity: 70,
   backgroundMotion: "system",
+  customPromptTemplates: [],
 };
 
 const DEFAULT_HISTORY: HistoryCollection = { sessions: [] };
@@ -59,6 +62,16 @@ export async function loadSettings(): Promise<LunarisSettings> {
     backgroundScene: (["moonlit", "aurora", "nebula", "meteor", "eclipse", "quiet"].includes(stored.backgroundScene) ? stored.backgroundScene : "moonlit") as BackgroundScene,
     backgroundIntensity: typeof stored.backgroundIntensity === "number" ? Math.max(0, Math.min(100, stored.backgroundIntensity)) : 70,
     backgroundMotion: (["system", "reduced", "still"].includes(stored.backgroundMotion) ? stored.backgroundMotion : "system") as BackgroundMotion,
+    customPromptTemplates: Array.isArray(stored.customPromptTemplates)
+      ? stored.customPromptTemplates.filter((template): template is PromptTemplate => Boolean(
+        template && typeof template === "object"
+        && typeof template.id === "string" && template.id.startsWith("custom-")
+        && typeof template.title === "string" && template.title.trim().length > 0
+        && ["Development", "Creative", "Workflow"].includes(template.category)
+        && typeof template.description === "string"
+        && typeof template.prompt === "string" && template.prompt.trim().length > 0
+      )).slice(0, 100)
+      : [],
   };
 }
 

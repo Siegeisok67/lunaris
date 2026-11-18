@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowUpRight, ImagePlus, LibraryBig, LoaderCircle, Paperclip, Search, Send, Sparkles, X } from "lucide-react";
+import { ArrowUpRight, ImagePlus, LibraryBig, LoaderCircle, Paperclip, Pencil, Plus, Search, Send, Sparkles, Trash2, X } from "lucide-react";
 import { readImage } from "@tauri-apps/plugin-clipboard-manager";
 import type { ReferenceImage } from "../../types/architect";
 import type { ProviderConfig } from "../../types/provider";
 import { GlassCard } from "../ui/GlassCard";
-import { PROMPT_TEMPLATES } from "../../data/promptTemplates";
+import { PROMPT_TEMPLATES, type PromptTemplate, type PromptTemplateCategory } from "../../data/promptTemplates";
 import type { MemoryCollection, MemoryProject } from "../../types/memory";
 import { memoryPayload } from "../../lib/memory";
 
@@ -14,6 +14,8 @@ interface PromptInputProps {
   memory: MemoryCollection;
   selectedProjectId: string | null;
   memoryEnabled: boolean;
+  customTemplates: PromptTemplate[];
+  onSaveCustomTemplates: (templates: PromptTemplate[]) => void;
   onProjectChange: (projectId: string | null) => void;
   onMemoryEnabledChange: (enabled: boolean) => void;
   onStart: (prompt: string, images: ReferenceImage[], projectId: string | null, includeMemory: boolean) => void;
@@ -85,7 +87,7 @@ async function fromClipboard(): Promise<ReferenceImage> {
   };
 }
 
-export function PromptInput({ config, memory, selectedProjectId, memoryEnabled, onProjectChange, onMemoryEnabledChange, onStart }: PromptInputProps) {
+export function PromptInput({ config, memory, selectedProjectId, memoryEnabled, customTemplates, onSaveCustomTemplates, onProjectChange, onMemoryEnabledChange, onStart }: PromptInputProps) {
   const [prompt, setPrompt] = useState(() => { try { return localStorage.getItem("lunaris.promptDraft") ?? ""; } catch { return ""; } });
   const [draftRecovered] = useState(() => { try { return Boolean(localStorage.getItem("lunaris.promptDraft")); } catch { return false; } });
   useEffect(() => { try { if (prompt.trim()) localStorage.setItem("lunaris.promptDraft", prompt); else localStorage.removeItem("lunaris.promptDraft"); } catch { /* Draft recovery is best effort when storage is unavailable. */ } }, [prompt]);
@@ -96,14 +98,39 @@ export function PromptInput({ config, memory, selectedProjectId, memoryEnabled, 
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [templateQuery, setTemplateQuery] = useState("");
   const [templateCategory, setTemplateCategory] = useState("All");
+  const [templateDraft, setTemplateDraft] = useState<PromptTemplate | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const starters = [
     { label: "Build an app", text: "Help me plan and build an app. Clarify the users, core workflow, visual direction, platform, and integrations before writing the implementation plan." },
     { label: "Create in Blender", text: "Help me create this in Blender. Clarify the subject, style, scale, scene contents, and how I want to review the result. Include relevant Blender tools and skills in the final plan." },
     { label: "Improve a design", text: "Help me improve this design. Review my reference images, identify the intended audience and mood, then clarify the most important changes and how I will judge the result." },
   ];
-  const visibleTemplates = PROMPT_TEMPLATES.filter((template) => (templateCategory === "All" || template.category === templateCategory) && `${template.title} ${template.description} ${template.prompt}`.toLowerCase().includes(templateQuery.trim().toLowerCase()));
+  const visibleTemplates = [...PROMPT_TEMPLATES, ...customTemplates].filter((template) => (templateCategory === "All" || template.category === templateCategory) && `${template.title} ${template.description} ${template.prompt}`.toLowerCase().includes(templateQuery.trim().toLowerCase()));
   const includedMemory = memoryPayload(memory, selectedProjectId, memoryEnabled);
+
+  const beginTemplate = (template?: PromptTemplate) => setTemplateDraft(template ?? {
+    id: `custom-${crypto.randomUUID()}`,
+    title: "",
+    category: "Workflow",
+    description: "",
+    prompt: "",
+  });
+
+  const saveTemplate = () => {
+    if (!templateDraft?.title.trim() || !templateDraft.prompt.trim()) return;
+    const existing = customTemplates.some((template) => template.id === templateDraft.id);
+    if (!existing && customTemplates.length >= 100) return;
+    const updated = existing
+      ? customTemplates.map((template) => template.id === templateDraft.id ? { ...templateDraft, title: templateDraft.title.trim(), description: templateDraft.description.trim(), prompt: templateDraft.prompt.trim() } : template)
+      : [...customTemplates, { ...templateDraft, title: templateDraft.title.trim(), description: templateDraft.description.trim(), prompt: templateDraft.prompt.trim() }];
+    onSaveCustomTemplates(updated);
+    setTemplateDraft(null);
+  };
+
+  const deleteTemplate = (template: PromptTemplate) => {
+    if (!window.confirm(`Delete the custom template “${template.title}”?`)) return;
+    onSaveCustomTemplates(customTemplates.filter((item) => item.id !== template.id));
+  };
 
   const addFiles = async (files: FileList | File[]) => {
     setImageError(null);
@@ -224,9 +251,13 @@ export function PromptInput({ config, memory, selectedProjectId, memoryEnabled, 
       <AnimatePresence>
         {templatesOpen && <motion.div className="template-gallery-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onMouseDown={(event) => { if (event.target === event.currentTarget) setTemplatesOpen(false); }}>
           <motion.section className="template-gallery glass-card" role="dialog" aria-modal="true" aria-labelledby="template-gallery-title" initial={{ opacity: 0, y: 16, scale: 0.985 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 8, scale: 0.99 }}>
-            <header className="template-gallery-heading"><div><span className="settings-eyebrow">START WITH STRUCTURE</span><h2 id="template-gallery-title">Prompt templates</h2><p>Choose a starting point. You can edit it before Lunaris analyzes anything.</p></div><button className="settings-icon-button" aria-label="Close templates" onClick={() => setTemplatesOpen(false)}><X size={17} /></button></header>
+            <header className="template-gallery-heading"><div><span className="settings-eyebrow">START WITH STRUCTURE</span><h2 id="template-gallery-title">Prompt templates</h2><p>Choose a starting point or save a reusable workflow for later.</p></div><div className="template-gallery-heading-actions"><button className="secondary-button" onClick={() => beginTemplate()}><Plus size={13} /> New template</button><button className="settings-icon-button" aria-label="Close templates" onClick={() => setTemplatesOpen(false)}><X size={17} /></button></div></header>
             <div className="template-gallery-tools"><label className="template-search"><Search size={15} /><input aria-label="Search prompt templates" value={templateQuery} onChange={(event) => setTemplateQuery(event.target.value)} placeholder="Search templates…" /></label><div className="template-categories">{["All", "Development", "Creative", "Workflow"].map((category) => <button key={category} className={templateCategory === category ? "active" : ""} aria-pressed={templateCategory === category} onClick={() => setTemplateCategory(category)}>{category}</button>)}</div></div>
-            <div className="template-gallery-grid">{visibleTemplates.map((template) => <button key={template.id} className="template-choice" onClick={() => { setPrompt(template.prompt); setTemplatesOpen(false); }}><span>{template.category}</span><strong>{template.title}</strong><small>{template.description}</small><i>Use template <ArrowUpRight size={13} /></i></button>)}{visibleTemplates.length === 0 && <p className="template-no-results">No templates match that search.</p>}</div>
+            {templateDraft && <form className="custom-template-form" onSubmit={(event) => { event.preventDefault(); saveTemplate(); }}><div className="custom-template-form-heading"><strong>{customTemplates.some((template) => template.id === templateDraft.id) ? "Edit custom template" : "Create custom template"}</strong><button type="button" className="settings-icon-button" aria-label="Cancel template edit" onClick={() => setTemplateDraft(null)}><X size={14} /></button></div><div className="custom-template-form-grid"><label><span>Title</span><input required maxLength={80} value={templateDraft.title} onChange={(event) => setTemplateDraft({ ...templateDraft, title: event.target.value })} placeholder="e.g. Blender prop blockout" /></label><label><span>Category</span><select value={templateDraft.category} onChange={(event) => setTemplateDraft({ ...templateDraft, category: event.target.value as PromptTemplateCategory })}><option>Development</option><option>Creative</option><option>Workflow</option></select></label><label className="wide"><span>Short description</span><input maxLength={180} value={templateDraft.description} onChange={(event) => setTemplateDraft({ ...templateDraft, description: event.target.value })} placeholder="What this workflow is for" /></label><label className="wide"><span>Prompt</span><textarea required maxLength={16000} rows={5} value={templateDraft.prompt} onChange={(event) => setTemplateDraft({ ...templateDraft, prompt: event.target.value })} placeholder="Write the reusable request and details Lunaris should clarify…" /></label></div><div className="custom-template-form-actions"><small>{customTemplates.length}/100 saved · {templateDraft.prompt.length.toLocaleString()} / 16,000 characters</small><button type="submit" className="primary-button" disabled={!templateDraft.title.trim() || !templateDraft.prompt.trim() || (!customTemplates.some((template) => template.id === templateDraft.id) && customTemplates.length >= 100)}>Save template</button></div></form>}
+            <div className="template-gallery-grid">{visibleTemplates.map((template) => {
+              const custom = template.id.startsWith("custom-");
+              return <article key={template.id} className={`template-choice ${custom ? "custom" : ""}`}><span>{custom ? `CUSTOM · ${template.category}` : template.category}</span><strong>{template.title}</strong><small>{template.description}</small><div className="template-choice-actions"><button type="button" onClick={() => { setPrompt(template.prompt); setTemplatesOpen(false); }}><i>Use template <ArrowUpRight size={13} /></i></button>{custom && <><button type="button" aria-label={`Edit ${template.title}`} onClick={() => beginTemplate(template)}><Pencil size={12} /></button><button type="button" aria-label={`Delete ${template.title}`} onClick={() => deleteTemplate(template)}><Trash2 size={12} /></button></>}</div></article>;
+            })}{visibleTemplates.length === 0 && <p className="template-no-results">No templates match that search.</p>}</div>
           </motion.section>
         </motion.div>}
       </AnimatePresence>

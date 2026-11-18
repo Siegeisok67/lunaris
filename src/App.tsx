@@ -41,6 +41,7 @@ const INITIAL_SETTINGS: LunarisSettings = {
   backgroundScene: "moonlit",
   backgroundIntensity: 70,
   backgroundMotion: "system",
+  customPromptTemplates: [],
 };
 
 interface ChecklistStep { id: string; label: string }
@@ -374,6 +375,12 @@ export default function App() {
     void saveSettings(next).catch((error) => setNotice(`Settings could not be saved: ${errorText(error)}`));
   };
 
+  const saveCustomTemplates = (customPromptTemplates: LunarisSettings["customPromptTemplates"]) => {
+    const next = { ...settings, customPromptTemplates };
+    setSettings(next);
+    void saveSettings(next).catch((error) => setNotice(`Custom templates could not be saved: ${errorText(error)}`));
+  };
+
   const acceptModelRequest = (model: string, runtime: "ollama" | "custom", baseUrl: string) => {
     const updated = {
       ...settings.providers,
@@ -519,6 +526,15 @@ export default function App() {
     }
   };
 
+  const copyReviewPrompt = async (text: string) => {
+    try {
+      await invoke("clipboard_write_text", { text });
+      setNotice("Blueprint review prompt copied. Paste it into the Executor when you want a second-pass review.");
+    } catch (error) {
+      setNotice(`Could not copy the review prompt: ${errorText(error)}`);
+    }
+  };
+
   const requestStop = async (requestId: string) => {
     for (let attempt = 0; attempt < 5; attempt += 1) {
       try {
@@ -627,11 +643,11 @@ export default function App() {
               <motion.div key="memory" className="workspace-view" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={motionTransitions.page}>{memoryLoadedSuccessfully ? <MemoryManager memory={memory} onChange={(next) => { void updateMemory(next); }} onDefaultChange={updateMemoryDefault} onClose={() => setPage("forge")} /> : <div className="memory-load-error glass-card"><Moon size={22} /><h2>Memory is read-only</h2><p>Lunaris could not safely read the saved memory file. It has not overwritten it. Restart after resolving the storage issue, or close this page and continue without memory.</p><button className="secondary-button" onClick={() => setPage("forge")}>Close</button></div>}</motion.div>
             ) : loop.state.status === "idle" ? (
               <motion.div key="input" className="forge-page page-content" initial={{ opacity: 0, y: 9, filter: "blur(2px)" }} animate={{ opacity: 1, y: 0, filter: "blur(0px)" }} exit={{ opacity: 0, y: -8 }} transition={motionTransitions.page}>
-                <PromptInput config={settings.providers.architect} memory={memory} selectedProjectId={selectedProjectId} memoryEnabled={includeMemory} onProjectChange={setSelectedProjectId} onMemoryEnabledChange={(enabled) => { includeMemoryOverride.current = true; setIncludeMemory(enabled); }} onStart={startPrompt} />
+                <PromptInput config={settings.providers.architect} memory={memory} selectedProjectId={selectedProjectId} memoryEnabled={includeMemory} customTemplates={settings.customPromptTemplates} onSaveCustomTemplates={saveCustomTemplates} onProjectChange={setSelectedProjectId} onMemoryEnabledChange={(enabled) => { includeMemoryOverride.current = true; setIncludeMemory(enabled); }} onStart={startPrompt} />
               </motion.div>
             ) : loop.state.status === "ready" && displayedCompiled ? (
               <motion.div key="blueprint" className="blueprint-page page-content" initial={{ opacity: 0, y: 9, filter: "blur(2px)" }} animate={{ opacity: 1, y: 0, filter: "blur(0px)" }} exit={{ opacity: 0, y: -8 }} transition={motionTransitions.page}>
-                <BlueprintViewer compiled={displayedCompiled} executorMode={settings.providers.executorMode} executorModel={settings.providers.executor.model} checklist={checklist} completedSteps={completedChecklistSteps} onToggleStep={toggleChecklistStep} onClearChecklist={clearChecklist} answers={loop.state.answers} memory={memory} projectId={selectedProjectId} projectName={memory.projects.find((project) => project.id === selectedProjectId)?.name ?? null} onSaveMemory={saveAnswerMemory} onCopy={copyPrompt} onExport={(format) => { const session = currentSessionForExport(); if (session) exportSession(session, format); }} onStream={() => void startStream()} onStop={stopStream} streaming={streaming} executorText={executorText} streamError={streamError} onNewPrompt={newPrompt} />
+                <BlueprintViewer compiled={displayedCompiled} executorMode={settings.providers.executorMode} executorModel={settings.providers.executor.model} checklist={checklist} completedSteps={completedChecklistSteps} onToggleStep={toggleChecklistStep} onClearChecklist={clearChecklist} onCopyReview={(text) => void copyReviewPrompt(text)} answers={loop.state.answers} memory={memory} projectId={selectedProjectId} projectName={memory.projects.find((project) => project.id === selectedProjectId)?.name ?? null} onSaveMemory={saveAnswerMemory} onCopy={copyPrompt} onExport={(format) => { const session = currentSessionForExport(); if (session) exportSession(session, format); }} onStream={() => void startStream()} onStop={stopStream} streaming={streaming} executorText={executorText} streamError={streamError} onNewPrompt={newPrompt} />
               </motion.div>
             ) : (
               <motion.div key="clarification" className="clarification-page page-content" initial={{ opacity: 0, y: 9, filter: "blur(2px)" }} animate={{ opacity: 1, y: 0, filter: "blur(0px)" }} exit={{ opacity: 0, y: -8 }} transition={motionTransitions.page}>
