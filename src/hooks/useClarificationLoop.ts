@@ -21,10 +21,11 @@ Return exactly one JSON object with these keys and no Markdown fences or prose:
   "context_recommendation": null,
   "is_ready_to_execute": false,
   "next_questions": [{"id":"stable-short-id","question":"One concrete question","options":["Choice A","Choice B"]}],
-  "final_execution_prompt": ""
+  "final_execution_prompt": "",
+  "workflow_stages": [{"id":"draft","title":"First working draft","goal":"Create the smallest end-to-end version","deliverable":"A runnable first draft","verification":"Run it and check the main flow"}]
 }
 
-Use only skill IDs and tool IDs listed in the request. Select every relevant registered application and MCP call, but never invent or rename tool IDs. Read the skill descriptions, triggers, and guidance excerpt to choose skills because the Executor will explicitly invoke those skills. Ask up to three concise questions per turn. Include an options array only when useful; the user can always type a custom answer. When the request has enough information, set is_ready_to_execute to true, return no questions, and write a complete step-by-step final_execution_prompt. Keep the prompt specific to the user's tools and constraints. Do not invent completed work.`;
+Use only skill IDs and tool IDs listed in the request. Select every relevant registered application and MCP call, but never invent or rename tool IDs. Read the skill descriptions, triggers, and guidance excerpt to choose skills because the Executor will explicitly invoke those skills. Ask up to three concise questions per turn. Include an options array only when useful; the user can always type a custom answer. When the request has enough information, set is_ready_to_execute to true, return no questions, and write a complete step-by-step final_execution_prompt. For application, website, game, API, or other software-building requests, return 4–6 workflow_stages. Include a minimal end-to-end first draft, a verification stage with concrete checks, feature expansion, and polish/regression checks. Every stage needs a short stable id, goal, deliverable, and verification. Stages after the first draft must stay pending until the user explicitly advances them. For non-software work, omit workflow_stages. Keep the prompt specific to the user's tools and constraints. Do not invent completed work.`;
 
 const EMPTY_STATE: LoopState = {
   status: "idle",

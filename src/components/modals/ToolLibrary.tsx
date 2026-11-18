@@ -1,7 +1,8 @@
 import { useMemo, useState, type FormEvent } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { AnimatePresence, motion } from "framer-motion";
-import { AppWindow, Blocks, Plus, Save, Server, Trash2, X } from "lucide-react";
-import type { LocalApplication, McpServer, McpTool, ToolCatalog } from "../../types/tools";
+import { AppWindow, Blocks, LoaderCircle, Plus, Radar, Save, Server, Trash2, X } from "lucide-react";
+import type { LocalApplication, McpServer, McpTool, ToolCatalog, ToolHealthResult } from "../../types/tools";
 import { choiceMotion, motionTransitions } from "../../lib/motion";
 import { mcpServerContainsCredential } from "../../lib/toolCatalog";
 
@@ -38,6 +39,8 @@ export function ToolLibrary({ catalog, onSave, onClose }: ToolLibraryProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [healthBusy, setHealthBusy] = useState(false);
+  const [healthById, setHealthById] = useState<Record<string, ToolHealthResult>>({});
   const entries = tab === "applications" ? catalog.applications : catalog.mcpServers;
   const visibleName = draft?.value.name || (draft?.kind === "application" ? "New application" : "New MCP server");
 
@@ -148,6 +151,25 @@ export function ToolLibrary({ catalog, onSave, onClose }: ToolLibraryProps) {
     updateServer("tools", draft.value.tools.map((tool) => tool.id === id ? { ...tool, [key]: value } : tool));
   };
 
+  const checkCurrentEntry = async () => {
+    if (!draft) return;
+    setHealthBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const result = await invoke<ToolHealthResult>("check_tool_health", {
+        kind: draft.kind,
+        connectionKind: draft.kind === "mcp" ? draft.value.connectionKind : null,
+        location: draft.kind === "application" ? draft.value.executablePath : draft.value.commandOrUrl,
+      });
+      setHealthById((current) => ({ ...current, [draft.value.id]: result }));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setHealthBusy(false);
+    }
+  };
+
   const toolEntryCount = (server: McpServer) => `${server.tools.length} ${server.tools.length === 1 ? "call" : "calls"}`;
 
   return (
@@ -175,7 +197,7 @@ export function ToolLibrary({ catalog, onSave, onClose }: ToolLibraryProps) {
               return (
                 <button key={entry.id} type="button" className={`tools-list-item ${selected ? "active" : ""}`} onClick={() => tab === "applications" ? openApplication(entry as LocalApplication) : openServer(entry as McpServer)}>
                   <span className="tools-list-icon">{tab === "applications" ? <AppWindow size={15} /> : <Server size={15} />}</span>
-                  <span className="tools-list-copy"><strong>{name}</strong><small>{detail}</small><em>{entry.enabled ? "Enabled for prompts" : "Disabled"}</em></span>
+                  <span className="tools-list-copy"><strong>{name}</strong><small>{detail}</small><em>{entry.enabled ? "Enabled for prompts" : "Disabled"}{healthById[entry.id] ? ` · ${healthById[entry.id].status} · checked ${new Date(Number(healthById[entry.id].checkedAt) * 1000).toLocaleTimeString()}` : ""}</em></span>
                 </button>
               );
             })}
@@ -236,8 +258,10 @@ export function ToolLibrary({ catalog, onSave, onClose }: ToolLibraryProps) {
                   <div className="tools-editor-feedback">
                     {error && <p className="inline-error" role="alert">{error}</p>}
                     {message && <p className="tools-success" role="status">{message}</p>}
+                    {draft && healthById[draft.value.id] && <p className={`tool-health-result ${healthById[draft.value.id].status}`} role="status">{healthById[draft.value.id].detail}</p>}
                   </div>
                   <div className="tools-editor-actions">
+                    <button type="button" className="secondary-button tool-check-button" onClick={() => void checkCurrentEntry()} disabled={healthBusy}><Radar size={13} />{healthBusy ? <LoaderCircle className="spin" size={13} /> : "Check"}</button>
                     <button type="button" className="tools-delete-button" onClick={() => void removeEntry()} disabled={busy}><Trash2 size={14} /> {draft.isNew ? "Discard" : "Remove"}</button>
                     <button type="submit" className="primary-button" disabled={busy}><Save size={14} /> Save entry</button>
                   </div>

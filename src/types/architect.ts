@@ -7,6 +7,40 @@ export interface QuestionCard {
   options?: string[];
 }
 
+export interface WorkflowStage {
+  id: string;
+  title: string;
+  goal: string;
+  deliverable: string;
+  verification: string;
+}
+
+export type WorkflowStageStatus = "pending" | "in_progress" | "needs_changes" | "verified";
+
+export interface WorkflowStageProgress {
+  stageId: string;
+  status: WorkflowStageStatus;
+  evidence: string;
+  updatedAt: string;
+}
+
+export interface ExecutorTurn {
+  id: string;
+  role: "user" | "assistant";
+  stageId: string | null;
+  content: string;
+  createdAt: string;
+}
+
+export interface BlueprintRevision {
+  id: string;
+  text: string;
+  result: ArchitectResult | null;
+  stages: WorkflowStage[];
+  createdAt: string;
+  reason: string;
+}
+
 export interface ArchitectResult {
   known_specs: SpecSheet;
   detected_skills: string[];
@@ -14,6 +48,7 @@ export interface ArchitectResult {
   is_ready_to_execute: boolean;
   next_questions: QuestionCard[];
   final_execution_prompt: string;
+  workflow_stages?: WorkflowStage[];
   executor_recommendation?: {
     model: string;
     rationale: string;
@@ -71,6 +106,10 @@ export interface PromptSession {
   completedChecklistSteps?: string[];
   projectId?: string | null;
   includeMemory?: boolean;
+  workflowStages?: WorkflowStage[];
+  stageProgress?: WorkflowStageProgress[];
+  executorConversation?: ExecutorTurn[];
+  blueprintRevisions?: BlueprintRevision[];
 }
 
 export const EMPTY_ARCHITECT_RESULT: ArchitectResult = {

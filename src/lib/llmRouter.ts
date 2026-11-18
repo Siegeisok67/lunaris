@@ -66,6 +66,23 @@ const ARCHITECT_JSON_SCHEMA = {
       },
     },
     final_execution_prompt: { type: "string" },
+    workflow_stages: {
+      type: "array",
+      minItems: 3,
+      maxItems: 8,
+      items: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          title: { type: "string" },
+          goal: { type: "string" },
+          deliverable: { type: "string" },
+          verification: { type: "string" },
+        },
+        required: ["id", "title", "goal", "deliverable", "verification"],
+        additionalProperties: false,
+      },
+    },
   },
   required: ["known_specs", "detected_skills", "detected_tools", "executor_recommendation", "context_recommendation", "is_ready_to_execute", "next_questions", "final_execution_prompt"],
   additionalProperties: false,

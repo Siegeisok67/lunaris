@@ -103,6 +103,7 @@ pub fn run() {
             commands::secrets::provider_delete_secret,
             commands::storage::storage_read,
             commands::storage::storage_write,
+            commands::storage::backup_restore,
             commands::storage::skills_list,
             commands::storage::skills_read,
             commands::storage::skills_write,
@@ -113,7 +114,8 @@ pub fn run() {
             commands::system::window_minimize,
             commands::system::window_toggle_maximize,
             commands::system::window_close,
-            commands::system::window_is_maximized
+            commands::system::window_is_maximized,
+            commands::tool_health::check_tool_health
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Lunaris");

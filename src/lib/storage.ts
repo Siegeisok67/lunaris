@@ -7,10 +7,11 @@ import type { SkillDefinition, SkillFile } from "../types/skills";
 import { EMPTY_TOOL_CATALOG, type ToolCatalog } from "../types/tools";
 import { EMPTY_MEMORY, type MemoryCollection } from "../types/memory";
 import { normalizeMemory } from "./memory";
+import { normalizeBlueprintRevisions, normalizeExecutorConversation, normalizeStageProgress, normalizeWorkflowStages, stagesForRequest } from "./workflow";
 
 export interface LunarisSettings {
   providers: ProviderSettings;
-  selectedNavigation: "forge" | "skills" | "settings" | "models" | "tools" | "history";
+  selectedNavigation: "forge" | "skills" | "settings" | "models" | "tools" | "history" | "studio" | "backup";
   toolCatalog: ToolCatalog;
   theme: AppTheme;
   monitorResources: boolean;
@@ -40,8 +41,8 @@ const DEFAULT_SETTINGS: LunarisSettings = {
 
 const DEFAULT_HISTORY: HistoryCollection = { sessions: [] };
 
-export async function loadSettings(): Promise<LunarisSettings> {
-  const stored = await invoke<LunarisSettings | null>("storage_read", { key: "settings" });
+export function normalizeSettings(value: unknown): LunarisSettings {
+  const stored = value as Partial<LunarisSettings> | null;
   if (!stored || typeof stored !== "object") return DEFAULT_SETTINGS;
   return {
     ...DEFAULT_SETTINGS,
@@ -56,12 +57,12 @@ export async function loadSettings(): Promise<LunarisSettings> {
       applications: Array.isArray(stored.toolCatalog?.applications) ? stored.toolCatalog.applications : [],
       mcpServers: Array.isArray(stored.toolCatalog?.mcpServers) ? stored.toolCatalog.mcpServers : [],
     },
-    theme: (["lunar", "aurora", "violet", "ember", "rose", "glacier", "cosmos"].includes(stored.theme) ? stored.theme : "lunar") as AppTheme,
+    theme: (typeof stored.theme === "string" && ["lunar", "aurora", "violet", "ember", "rose", "glacier", "cosmos"].includes(stored.theme) ? stored.theme : "lunar") as AppTheme,
     monitorResources: typeof stored.monitorResources === "boolean" ? stored.monitorResources : true,
     modelPreference: stored.modelPreference === "specialists" ? "specialists" : "balanced",
-    backgroundScene: (["moonlit", "aurora", "nebula", "meteor", "eclipse", "quiet"].includes(stored.backgroundScene) ? stored.backgroundScene : "moonlit") as BackgroundScene,
+    backgroundScene: (typeof stored.backgroundScene === "string" && ["moonlit", "aurora", "nebula", "meteor", "eclipse", "quiet"].includes(stored.backgroundScene) ? stored.backgroundScene : "moonlit") as BackgroundScene,
     backgroundIntensity: typeof stored.backgroundIntensity === "number" ? Math.max(0, Math.min(100, stored.backgroundIntensity)) : 70,
-    backgroundMotion: (["system", "reduced", "still"].includes(stored.backgroundMotion) ? stored.backgroundMotion : "system") as BackgroundMotion,
+    backgroundMotion: (typeof stored.backgroundMotion === "string" && ["system", "reduced", "still"].includes(stored.backgroundMotion) ? stored.backgroundMotion : "system") as BackgroundMotion,
     customPromptTemplates: Array.isArray(stored.customPromptTemplates)
       ? stored.customPromptTemplates.filter((template): template is PromptTemplate => Boolean(
         template && typeof template === "object"
@@ -70,9 +71,17 @@ export async function loadSettings(): Promise<LunarisSettings> {
         && ["Development", "Creative", "Workflow"].includes(template.category)
         && typeof template.description === "string"
         && typeof template.prompt === "string" && template.prompt.trim().length > 0
-      )).slice(0, 100)
+      )).map((template) => ({
+        ...template,
+        skillIds: Array.isArray(template.skillIds) ? template.skillIds.filter((id): id is string => typeof id === "string").slice(0, 40) : [],
+        toolIds: Array.isArray(template.toolIds) ? template.toolIds.filter((id): id is string => typeof id === "string").slice(0, 80) : [],
+      })).slice(0, 100)
       : [],
   };
+}
+
+export async function loadSettings(): Promise<LunarisSettings> {
+  return normalizeSettings(await invoke<LunarisSettings | null>("storage_read", { key: "settings" }));
 }
 
 export async function saveSettings(settings: LunarisSettings): Promise<void> {
@@ -81,8 +90,22 @@ export async function saveSettings(settings: LunarisSettings): Promise<void> {
 
 export async function loadHistory(): Promise<HistoryCollection> {
   const stored = await invoke<HistoryCollection | null>("storage_read", { key: "history" });
+  return normalizeHistoryCollection(stored);
+}
+
+export function normalizeHistoryCollection(value: unknown): HistoryCollection {
+  const stored = value as HistoryCollection | null;
   if (!stored || !Array.isArray(stored.sessions)) return DEFAULT_HISTORY;
-  return { sessions: stored.sessions.slice(0, 250) };
+  return { sessions: stored.sessions.slice(0, 250).map((session) => {
+    const workflowStages = stagesForRequest(session.prompt ?? "", session.workflowStages ?? session.result?.workflow_stages);
+    return {
+      ...session,
+      workflowStages,
+      stageProgress: normalizeStageProgress(session.stageProgress, workflowStages),
+      executorConversation: normalizeExecutorConversation(session.executorConversation),
+      blueprintRevisions: normalizeBlueprintRevisions(session.blueprintRevisions),
+    };
+  }) };
 }
 
 export async function saveHistory(history: HistoryCollection): Promise<void> {

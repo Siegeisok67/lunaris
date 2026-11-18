@@ -6,6 +6,8 @@ export interface PromptTemplate {
   category: PromptTemplateCategory;
   description: string;
   prompt: string;
+  skillIds?: string[];
+  toolIds?: string[];
 }
 
 export const PROMPT_TEMPLATES: PromptTemplate[] = [

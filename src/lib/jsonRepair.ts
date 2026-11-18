@@ -189,6 +189,24 @@ function readQuestions(value: unknown): QuestionCard[] {
   return questions;
 }
 
+function readWorkflowStages(value: unknown): ArchitectResult["workflow_stages"] {
+  if (!Array.isArray(value)) return undefined;
+  const stages: NonNullable<ArchitectResult["workflow_stages"]> = [];
+  const seen = new Set<string>();
+  for (const item of value.slice(0, 8)) {
+    if (!isRecord(item)) continue;
+    const id = typeof item.id === "string" ? item.id.trim().slice(0, 48) : "";
+    const title = typeof item.title === "string" ? item.title.trim().slice(0, 100) : "";
+    const goal = typeof item.goal === "string" ? item.goal.trim().slice(0, 1000) : "";
+    const deliverable = typeof item.deliverable === "string" ? item.deliverable.trim().slice(0, 800) : "";
+    const verification = typeof item.verification === "string" ? item.verification.trim().slice(0, 800) : "";
+    if (!id || !title || !goal || !deliverable || !verification || seen.has(id)) continue;
+    seen.add(id);
+    stages.push({ id, title, goal, deliverable, verification });
+  }
+  return stages.length ? stages : undefined;
+}
+
 export function validateArchitectResult(input: unknown): ArchitectResult {
   if (!isRecord(input)) throw new ArchitectJsonError("The Architect response must be a JSON object.");
   const detected = Array.isArray(input.detected_skills)
@@ -231,6 +249,7 @@ export function validateArchitectResult(input: unknown): ArchitectResult {
     is_ready_to_execute: ready,
     next_questions: ready ? [] : questions,
     final_execution_prompt: prompt,
+    ...(readWorkflowStages(input.workflow_stages) ? { workflow_stages: readWorkflowStages(input.workflow_stages) } : {}),
     executor_recommendation: recommendation?.model ? recommendation : null,
     context_recommendation: contextRecommendation,
   };

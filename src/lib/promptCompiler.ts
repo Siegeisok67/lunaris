@@ -1,7 +1,11 @@
 import type { ArchitectResult, AnswerRecord } from "../types/architect";
 import type { SkillDefinition } from "../types/skills";
 import type { ToolCatalog } from "../types/tools";
+import type { WorkflowStage, WorkflowStageProgress } from "../types/architect";
 import { selectToolReferences } from "./toolCatalog";
+import { compileStagePrompt } from "./workflow";
+
+export { compileStagePrompt } from "./workflow";
 
 export interface CompiledPrompt {
   text: string;
@@ -136,4 +140,8 @@ ${compileNote ? `\n## Compile note\n${compileNote}` : ""}`;
     estimatedTokensAfter,
     estimatedTokensSaved: estimatedTokensBefore - estimatedTokensAfter,
   };
+}
+
+export function compileWorkflowStagePrompt(blueprint: CompiledPrompt | string, stage: WorkflowStage, progress: WorkflowStageProgress[]): string {
+  return compileStagePrompt(typeof blueprint === "string" ? blueprint : blueprint.text, stage, progress);
 }

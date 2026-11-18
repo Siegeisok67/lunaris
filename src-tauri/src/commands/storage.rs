@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashSet;
 use tauri::{AppHandle, Manager};
 
 const MAX_SKILL_BYTES: usize = 512 * 1024;
@@ -14,6 +15,15 @@ static STORAGE_WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 pub struct SkillFile {
     pub id: String,
     pub content: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupRestorePayload {
+    pub settings: Value,
+    pub history: Value,
+    pub memory: Value,
+    pub skills: Vec<SkillFile>,
 }
 
 fn app_root(app: &AppHandle) -> Result<PathBuf, String> {
@@ -93,6 +103,74 @@ pub fn storage_write(app: AppHandle, key: String, value: Value) -> Result<(), St
         return Err("Lunaris data collections must be smaller than 32 MB.".into());
     }
     atomic_write(&path, &content)
+}
+
+#[tauri::command]
+pub fn backup_restore(app: AppHandle, backup: BackupRestorePayload) -> Result<(), String> {
+    if !backup.settings.is_object() || !backup.history.get("sessions").is_some_and(Value::is_array) || !backup.memory.is_object() {
+        return Err("The backup collections have an invalid shape.".into());
+    }
+    if backup.skills.len() > 500 {
+        return Err("A backup cannot contain more than 500 skill files.".into());
+    }
+    let mut skill_ids = HashSet::new();
+    let mut writes: Vec<(PathBuf, Vec<u8>)> = Vec::new();
+    for (key, value) in [("settings", backup.settings), ("history", backup.history), ("memory", backup.memory)] {
+        let content = serde_json::to_vec_pretty(&value).map_err(|_| "Could not encode a restored collection.".to_string())?;
+        if content.len() as u64 > MAX_COLLECTION_BYTES { return Err("A backup collection exceeds the 32 MB limit.".into()); }
+        writes.push((storage_file(&app, key)?, content));
+    }
+    for skill in backup.skills {
+        let id = skill_id(&skill.id)?.to_owned();
+        if !skill_ids.insert(id.clone()) { return Err("The backup contains duplicate skill IDs.".into()); }
+        if skill.content.len() > MAX_SKILL_BYTES { return Err(format!("Skill {} exceeds the 512 KB limit.", id)); }
+        writes.push((skill_path(&app, &id)?, skill.content.into_bytes()));
+    }
+    let combined_size: usize = writes.iter().map(|(_, content)| content.len()).sum();
+    if combined_size > 64 * 1024 * 1024 { return Err("The combined backup is larger than 64 MB.".into()); }
+
+    let _write_guard = STORAGE_WRITE_LOCK.lock().map_err(|_| "Lunaris storage is temporarily unavailable.".to_string())?;
+    let transaction_id = format!("{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|value| value.as_millis()).unwrap_or(0));
+    let mut staged = Vec::with_capacity(writes.len());
+    for (index, (target, content)) in writes.into_iter().enumerate() {
+        let parent = target.parent().ok_or_else(|| "Invalid restore path.".to_string())?;
+        ensure_dir(parent)?;
+        let mut temporary = target.clone();
+        let filename = target.file_name().and_then(|name| name.to_str()).ok_or_else(|| "Invalid restore filename.".to_string())?;
+        temporary.set_file_name(format!("{filename}.restore-{transaction_id}-{index}.tmp"));
+        if let Err(_) = fs::write(&temporary, content) {
+            for (_, path, _) in &staged { let _ = fs::remove_file(path); }
+            return Err("Could not stage the backup restore.".into());
+        }
+        let previous = match fs::read(&target) {
+            Ok(content) => Some(content),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(_) => {
+                let _ = fs::remove_file(&temporary);
+                for (_, path, _) in &staged { let _ = fs::remove_file(path); }
+                return Err("Could not safely prepare the existing Lunaris data for restore.".into());
+            }
+        };
+        staged.push((target, temporary, previous));
+    }
+
+    let mut committed = 0usize;
+    for index in 0..staged.len() {
+        let (target, temporary, _) = &staged[index];
+        if fs::rename(temporary, target).is_err() {
+            let mut rollback_failed = false;
+            for (restore_target, _, previous) in staged[..committed].iter().rev() {
+                match previous {
+                    Some(content) => if fs::write(restore_target, content).is_err() { rollback_failed = true; },
+                    None => if fs::remove_file(restore_target).is_err() { rollback_failed = true; },
+                }
+            }
+            for (_, path, _) in &staged[index..] { let _ = fs::remove_file(path); }
+            return Err(if rollback_failed { "Restore failed and Lunaris could not fully roll back the prior files; restart the app and inspect the data directory.".into() } else { "Restore failed. The previous Lunaris data was restored.".into() });
+        }
+        committed += 1;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -188,6 +266,10 @@ fn atomic_write(path: &Path, data: &[u8]) -> Result<(), String> {
     let _write_guard = STORAGE_WRITE_LOCK
         .lock()
         .map_err(|_| "Lunaris storage is temporarily unavailable.".to_string())?;
+    atomic_write_unlocked(path, data)
+}
+
+fn atomic_write_unlocked(path: &Path, data: &[u8]) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| "Invalid Lunaris data path.".to_string())?;

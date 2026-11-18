@@ -36,6 +36,13 @@ export interface ToolCatalog {
   mcpServers: McpServer[];
 }
 
+export interface ToolHealthResult {
+  status: "available" | "reachable" | "missing" | "unhealthy" | "timeout" | "invalid";
+  detail: string;
+  checkedAt: string;
+  httpStatus?: number;
+}
+
 export const EMPTY_TOOL_CATALOG: ToolCatalog = {
   applications: [],
   mcpServers: [],

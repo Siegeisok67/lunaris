@@ -15,21 +15,26 @@ import { ToolLibrary } from "./components/modals/ToolLibrary";
 import { MemoryManager } from "./components/memory/MemoryManager";
 import { ModelCenter } from "./components/models/ModelCenter";
 import { ModelChangeRequest, type ExecutorRecommendation } from "./components/models/ModelChangeRequest";
+import { DesignStudio } from "./components/studio/DesignStudio";
+import { BackupManager } from "./components/modals/BackupManager";
 import { useSystemResources } from "./hooks/useSystemResources";
 import { MODEL_CATALOG, modelCapabilities } from "./data/modelCatalog";
 import { resourceContext } from "./lib/resourceContext";
 import { useClarificationLoop } from "./hooks/useClarificationLoop";
 import { cancelStream, streamText } from "./lib/llmRouter";
-import { compileExecutionPrompt } from "./lib/promptCompiler";
+import { compileExecutionPrompt, compileWorkflowStagePrompt } from "./lib/promptCompiler";
 import { motionTransitions } from "./lib/motion";
 import { loadHistory, loadMemory, loadSettings, loadSkills, saveHistory, saveMemory, saveSettings, type LunarisSettings } from "./lib/storage";
 import { hasMemory, memoryContext } from "./lib/memory";
-import type { AnswerRecord, PromptSession, ReferenceImage } from "./types/architect";
+import { mergeBackup } from "./lib/backup";
+import { makeBlueprintRevision, stagesForRequest } from "./lib/workflow";
+import type { AnswerRecord, BlueprintRevision, ExecutorTurn, PromptSession, ReferenceImage, WorkflowStage, WorkflowStageProgress } from "./types/architect";
 import { EMPTY_MEMORY, MEMORY_LIMITS, type MemoryCollection, type MemoryEntry, type MemoryScope } from "./types/memory";
 import { DEFAULT_PROVIDER_SETTINGS } from "./types/provider";
 import type { ProviderSettings as ProviderSettingsType } from "./types/provider";
 import type { SkillDefinition } from "./types/skills";
 import type { ToolCatalog } from "./types/tools";
+import type { BackupBundle } from "./types/backup";
 
 const INITIAL_SETTINGS: LunarisSettings = {
   providers: DEFAULT_PROVIDER_SETTINGS,
@@ -153,6 +158,10 @@ export default function App() {
   const [initialized, setInitialized] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [executorText, setExecutorText] = useState("");
+  const [executorConversation, setExecutorConversation] = useState<ExecutorTurn[]>([]);
+  const [executorChatDraft, setExecutorChatDraft] = useState("");
+  const [activeStudioStageId, setActiveStudioStageId] = useState<string | null>(null);
+  const [blueprintDraft, setBlueprintDraft] = useState<string | null>(null);
   const [streaming, setStreaming] = useState(false);
   const [streamError, setStreamError] = useState<string | null>(null);
   const [modelRequest, setModelRequest] = useState<ExecutorRecommendation | null>(null);
@@ -243,6 +252,12 @@ export default function App() {
   }, [history, initialized]);
 
   useEffect(() => {
+    const id = sessionId.current;
+    if (!id || !executorConversation.length) return;
+    setHistory((current) => current.map((session) => session.id === id ? { ...session, executorConversation, updatedAt: new Date().toISOString() } : session));
+  }, [executorConversation]);
+
+  useEffect(() => {
     if (!notice) return;
     const timeout = window.setTimeout(() => setNotice(null), 5200);
     return () => window.clearTimeout(timeout);
@@ -267,13 +282,19 @@ export default function App() {
     });
   }, [loop.state.status, loop.state.result, loop.state.originalPrompt, loop.state.answers, loop.state.skippedQuestions, skills, referenceLines.join("\n"), settings.toolCatalog]);
 
+  const workflowStages = useMemo(() => loop.state.status === "ready" && loop.state.result
+    ? stagesForRequest(loop.state.originalPrompt, loop.state.result.workflow_stages)
+    : [], [loop.state.status, loop.state.result, loop.state.originalPrompt]);
+
   const activeMemoryContext = requestMemoryContext.current;
 
   const displayedCompiled = useMemo(() => {
-    if (!compiled || !restoredSession.current) return compiled;
+    if (!compiled) return compiled;
+    if (blueprintDraft !== null) return { ...compiled, text: blueprintDraft };
+    if (!restoredSession.current) return compiled;
     const saved = history.find((session) => session.id === sessionId.current);
     return saved?.compiledPrompt ? { ...compiled, text: saved.compiledPrompt } : compiled;
-  }, [compiled, history]);
+  }, [compiled, history, blueprintDraft]);
 
   useEffect(() => {
     if (!compiled || restoredSession.current || !loop.state.result) return;
@@ -298,10 +319,14 @@ export default function App() {
         completedChecklistSteps: prior?.completedChecklistSteps ?? [],
         projectId: selectedProjectId,
         includeMemory,
+        workflowStages,
+        stageProgress: prior?.stageProgress ?? workflowStages.map((stage) => ({ stageId: stage.id, status: "pending" as const, evidence: "", updatedAt: now })),
+        executorConversation: prior?.executorConversation ?? [],
+        blueprintRevisions: prior?.blueprintRevisions ?? [],
       };
       return [session, ...current.filter((item) => item.id !== id)].slice(0, 250);
     });
-  }, [compiled, loop.state.originalPrompt, loop.state.result, loop.state.answers, loop.state.skippedQuestions, selectedProjectId, includeMemory]);
+  }, [compiled, loop.state.originalPrompt, loop.state.result, loop.state.answers, loop.state.skippedQuestions, selectedProjectId, includeMemory, workflowStages]);
 
   const startPrompt = (prompt: string, attachments: ReferenceImage[], projectId: string | null, useMemory: boolean) => {
     setModelRequest(null);
@@ -314,6 +339,10 @@ export default function App() {
     requestMemoryContext.current = memoryContext(memory, projectId, useMemory);
     setStagedHandoffPaths(null);
     setExecutorText("");
+    setExecutorConversation([]);
+    setExecutorChatDraft("");
+    setActiveStudioStageId(null);
+    setBlueprintDraft(null);
     setStreamError(null);
     setPage("forge");
     void loop.start(prompt, attachments, effectiveContext(settings.providers.architect, "architect", resources.snapshot, prompt, attachments.length), skills, settings.toolCatalog, executorContextSummary(settings.providers.executor, resources.snapshot, prompt, attachments.length), resources.snapshot, requestMemoryContext.current);
@@ -333,6 +362,10 @@ export default function App() {
     includeMemoryOverride.current = false;
     setStagedHandoffPaths(null);
     setExecutorText("");
+    setExecutorConversation([]);
+    setExecutorChatDraft("");
+    setActiveStudioStageId(null);
+    setBlueprintDraft(null);
     setStreamError(null);
     loop.reset();
     setPage("forge");
@@ -350,6 +383,10 @@ export default function App() {
     includeMemoryOverride.current = true;
     setStagedHandoffPaths(null);
     setExecutorText("");
+    setExecutorConversation(session.executorConversation ?? []);
+    setExecutorChatDraft("");
+    setActiveStudioStageId(session.workflowStages?.find((stage) => (session.stageProgress ?? []).find((progress) => progress.stageId === stage.id)?.status !== "verified")?.id ?? session.workflowStages?.[0]?.id ?? null);
+    setBlueprintDraft(null);
     setStreamError(null);
     loop.restore(session);
     setPage("forge");
@@ -467,6 +504,10 @@ export default function App() {
 
   const checklist = useMemo(() => displayedCompiled ? extractChecklist(displayedCompiled.text) : [], [displayedCompiled?.text]);
   const completedChecklistSteps = history.find((session) => session.id === sessionId.current)?.completedChecklistSteps ?? [];
+  const activeSession = history.find((session) => session.id === sessionId.current) ?? currentSessionForExport();
+  const activeWorkflowStages = activeSession?.workflowStages?.length ? activeSession.workflowStages : workflowStages;
+  const activeStageProgress = activeSession?.stageProgress ?? activeWorkflowStages.map((stage) => ({ stageId: stage.id, status: "pending" as const, evidence: "", updatedAt: "" }));
+  const activeStudioStage = activeWorkflowStages.find((stage) => stage.id === activeStudioStageId) ?? activeWorkflowStages.find((stage) => !activeStageProgress.some((item) => item.stageId === stage.id && item.status === "verified")) ?? activeWorkflowStages[0];
   const toggleChecklistStep = (stepId: string) => {
     const id = sessionId.current;
     if (!id) return;
@@ -480,6 +521,62 @@ export default function App() {
   const clearChecklist = () => {
     const id = sessionId.current;
     if (id) setHistory((current) => current.map((session) => session.id === id ? { ...session, completedChecklistSteps: [] } : session));
+  };
+
+  const saveCurrentSession = (patch: Partial<PromptSession>) => {
+    const id = sessionId.current;
+    if (!id) return;
+    const updatedAt = new Date().toISOString();
+    setHistory((current) => current.map((session) => session.id === id ? { ...session, ...patch, updatedAt } : session));
+  };
+
+  const setStageProgress = (stageId: string, status: WorkflowStageProgress["status"], evidence: string) => {
+    const current = activeStageProgress.filter((item) => item.stageId !== stageId);
+    saveCurrentSession({ stageProgress: [...current, { stageId, status, evidence: evidence.slice(0, 4000), updatedAt: new Date().toISOString() }] });
+  };
+
+  const saveBlueprintRevision = (text: string, reason: string) => {
+    const session = currentSessionForExport();
+    const id = sessionId.current;
+    if (!session || !id || !displayedCompiled || text === displayedCompiled.text) return;
+    const snapshot = makeBlueprintRevision({ ...session, compiledPrompt: displayedCompiled.text, workflowStages: activeWorkflowStages }, displayedCompiled.text, reason);
+    const revisions = [...(session.blueprintRevisions ?? []), snapshot].slice(-20);
+    setHistory((current) => current.map((item) => item.id === id ? { ...item, compiledPrompt: text, blueprintRevisions: revisions, updatedAt: new Date().toISOString() } : item));
+    restoredSession.current = true;
+    setBlueprintDraft(text);
+    setNotice("Blueprint revision saved. The prior version is available below.");
+  };
+
+  const restoreBlueprintRevision = (revision: BlueprintRevision) => {
+    const session = currentSessionForExport();
+    const id = sessionId.current;
+    if (!session || !id || !window.confirm(`Restore “${revision.reason}” as the current blueprint? The current version will be saved first.`)) return;
+    const currentSnapshot = makeBlueprintRevision({ ...session, compiledPrompt: displayedCompiled?.text ?? session.compiledPrompt, workflowStages: activeWorkflowStages }, displayedCompiled?.text ?? session.compiledPrompt, "Before restoring " + revision.reason);
+    const revisions = [...(session.blueprintRevisions ?? []), currentSnapshot].slice(-20);
+    const nextResult = revision.result ?? session.result;
+    const nextStages = revision.stages.length ? revision.stages : session.workflowStages ?? workflowStages;
+    const nextSession = { ...session, result: nextResult, compiledPrompt: revision.text, workflowStages: nextStages, blueprintRevisions: revisions, updatedAt: new Date().toISOString() };
+    setHistory((current) => current.map((item) => item.id === id ? nextSession : item));
+    restoredSession.current = true;
+    setBlueprintDraft(null);
+    setActiveStudioStageId(nextStages.find((stage) => !activeStageProgress.some((item) => item.stageId === stage.id && item.status === "verified"))?.id ?? nextStages[0]?.id ?? null);
+    loop.restore(nextSession);
+    setNotice("Blueprint revision restored; the previous version was saved to history.");
+  };
+
+  const importBackup = async (backup: BackupBundle) => {
+    if (!memoryLoadedSuccessfully) throw new Error("Permanent memory could not be loaded safely. Resolve that storage issue before restoring a backup.");
+    const currentSkills = await invoke<import("./types/skills").SkillFile[]>("skills_list").then(async (ids) => Promise.all(ids.map((id) => invoke<import("./types/skills").SkillFile | null>("skills_read", { id })))).then((files) => files.filter((file): file is import("./types/skills").SkillFile => file !== null));
+    const merged = mergeBackup({ settings, history: { sessions: history }, memory, skills: currentSkills }, backup);
+    await invoke("backup_restore", { backup: merged });
+    setSettings(merged.settings);
+    document.documentElement.dataset.theme = merged.settings.theme;
+    setHistory(merged.history.sessions);
+    setMemory(merged.memory);
+    persistedMemory.current = merged.memory;
+    setMemoryLoadedSuccessfully(true);
+    try { setSkills(await loadSkills()); } catch { setNotice("Backup was restored, but Lunaris could not refresh the skill list. Reopen Skill Library to retry."); }
+    setPage("forge");
   };
 
   const copyPrompt = async () => {
@@ -551,7 +648,7 @@ export default function App() {
     if (activeStreamId.current) void requestStop(activeStreamId.current);
   };
 
-  const startStream = async () => {
+  const startStream = async (stage?: WorkflowStage, followUp?: string) => {
     if (!displayedCompiled || streaming) return;
     if (!settings.providers.executor.model.trim()) {
       setStreamError("Choose an Executor model in Provider Settings first.");
@@ -560,30 +657,100 @@ export default function App() {
     setStreaming(true);
     setStreamError(null);
     setExecutorText("");
+    setExecutorChatDraft("");
     stopRequested.current = false;
     activeStreamId.current = null;
     try {
-    await streamText({
+      const stagePrompt = stage ? compileWorkflowStagePrompt(displayedCompiled, stage, activeStageProgress) : displayedCompiled.text;
+      const priorTurns = executorConversation.slice(-30);
+      const messages = [
+        { role: "system" as const, content: `You are the configured Execution AI. Respect the blueprint and the user's current-stage boundary. Do not claim checks you did not run. For a stage, stop after that stage and provide precise test evidence or manual test instructions.\n\nCURRENT COMPUTER RESOURCES (timestamped advisory snapshot)\n${resourceContext(resources.snapshot)}` },
+        { role: "user" as const, content: stagePrompt },
+        ...priorTurns.map((turn) => ({ role: turn.role, content: turn.content })),
+        ...(followUp ? [{ role: "user" as const, content: followUp }] : []),
+      ];
+      const response = await streamText({
         role: "executor",
         config: images.length > 0
           ? { ...effectiveContext(settings.providers.executor, "executor", resources.snapshot, displayedCompiled.text, images.length), visionEnabled: true }
           : effectiveContext(settings.providers.executor, "executor", resources.snapshot, displayedCompiled.text, images.length),
         images,
         maxTokens: 4096,
-        messages: [
-          { role: "system", content: `You are the execution AI receiving a complete Lunaris blueprint. Follow the plan as far as your available tools permit. If you cannot access a project, provide concrete steps and state the limitation.\n\nCURRENT COMPUTER RESOURCES (timestamped advisory snapshot)\n${resourceContext(resources.snapshot)}` },
-          { role: "user", content: displayedCompiled.text },
-        ],
-      }, (delta) => setExecutorText((current) => current + delta), (id) => {
+        messages,
+      }, (delta) => {
+        setExecutorText((current) => current + delta);
+        setExecutorChatDraft((current) => current + delta);
+      }, (id) => {
         activeStreamId.current = id;
         if (stopRequested.current) void requestStop(id);
       });
+      if (stage || followUp) {
+        const now = new Date().toISOString();
+        const userTurn: ExecutorTurn = { id: crypto.randomUUID(), role: "user", stageId: stage?.id ?? activeStudioStageId, content: followUp ?? `Run stage: ${stage?.title ?? "full blueprint"}\n${stage?.goal ?? "Follow the full execution blueprint."}`, createdAt: now };
+        const assistantTurn: ExecutorTurn = { id: crypto.randomUUID(), role: "assistant", stageId: stage?.id ?? activeStudioStageId, content: response.text.slice(0, 20_000), createdAt: new Date().toISOString() };
+        setExecutorConversation((current) => [...current, userTurn, assistantTurn].slice(-60));
+      }
     } catch (error) {
       setStreamError(errorText(error));
     } finally {
       activeStreamId.current = null;
       setStreaming(false);
     }
+  };
+
+  const runWorkflowStage = (stage: WorkflowStage) => {
+    setActiveStudioStageId(stage.id);
+    setStageProgress(stage.id, "in_progress", activeStageProgress.find((item) => item.stageId === stage.id)?.evidence ?? "");
+    setPage("studio");
+    void startStream(stage);
+  };
+
+  const copyWorkflowStage = async (stage: WorkflowStage) => {
+    if (!displayedCompiled) return;
+    try {
+      let paths = stagedHandoffPaths;
+      if (images.length && !paths && loop.state.result) {
+        paths = [];
+        for (const [index, image] of images.entries()) {
+          const staged = await invoke<{ name: string; path: string }>("stage_handoff_image", { handoffId: sessionId.current ?? crypto.randomUUID(), index: index + 1, name: image.name, mimeType: image.mimeType, base64Data: image.base64 });
+          paths.push(staged.path);
+        }
+        setStagedHandoffPaths(paths);
+      }
+      const attachments = images.map((image, index) => `[REF-${String(index + 1).padStart(2, "0")}] ${image.name} (${image.width}×${image.height})${paths?.[index] ? ` — local file: "${paths[index]}"` : ` — Executor image ${index + 1}`}`);
+      const fullPrompt = loop.state.result ? compileExecutionPrompt({ originalPrompt: loop.state.originalPrompt, result: loop.state.result, answers: loop.state.answers, skills, skippedQuestions: loop.state.skippedQuestions, attachments, toolCatalog: settings.toolCatalog, memoryContext: requestMemoryContext.current }).text : displayedCompiled.text;
+      await invoke("clipboard_write_text", { text: compileWorkflowStagePrompt(fullPrompt, stage, activeStageProgress) });
+      setStageProgress(stage.id, "in_progress", activeStageProgress.find((item) => item.stageId === stage.id)?.evidence ?? "");
+      setNotice(`Stage prompt copied: ${stage.title}. The prompt asks the Executor to stop after this stage.`);
+    } catch (error) {
+      setNotice(`Could not copy the stage prompt: ${errorText(error)}`);
+    }
+  };
+
+  const sendExecutorFollowUp = (message: string) => {
+    setExecutorChatDraft("");
+    void startStream(activeStudioStage, message);
+  };
+
+  const copyExecutorFollowUp = async (message: string) => {
+    if (!displayedCompiled) return;
+    const stagePrompt = activeStudioStage ? compileWorkflowStagePrompt(displayedCompiled.text, activeStudioStage, activeStageProgress) : displayedCompiled.text;
+    const transcript = executorConversation.slice(-30).map((turn) => `${turn.role === "user" ? "User" : "Executor"}:\n${turn.content}`).join("\n\n");
+    const text = `${stagePrompt}\n\n## Follow-up conversation so far\n${transcript || "No prior conversation."}\n\n## User follow-up\n${message}\n\nReply to this follow-up only. Do not claim to run unavailable tests or tools.`;
+    try {
+      await invoke("clipboard_write_text", { text });
+      const turn: ExecutorTurn = { id: crypto.randomUUID(), role: "user", stageId: activeStudioStageId, content: message, createdAt: new Date().toISOString() };
+      setExecutorConversation((current) => [...current, turn].slice(-60));
+      setNotice("Follow-up prompt copied for your IDE agent.");
+    } catch (error) {
+      setNotice(`Could not copy the follow-up prompt: ${errorText(error)}`);
+    }
+  };
+
+  const recordExecutorReply = (message: string) => {
+    const turn: ExecutorTurn = { id: crypto.randomUUID(), role: "assistant", stageId: activeStudioStageId, content: message, createdAt: new Date().toISOString() };
+    setExecutorConversation((current) => [...current, turn].slice(-60));
+    setNotice("Executor reply saved to this session.");
   };
 
   const navigate = (target: NavigationPage | "settings") => {
@@ -641,9 +808,17 @@ export default function App() {
               <motion.div key="models" className="workspace-view" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={motionTransitions.page}><ModelCenter providers={settings.providers} resources={resources.snapshot} preference={settings.modelPreference} contextRecommendation={loop.state.result?.context_recommendation ?? null} onProvidersChange={(providers) => saveModelSettings({ providers })} onPreferenceChange={(modelPreference) => saveModelSettings({ modelPreference })} /></motion.div>
             ) : page === "memory" ? (
               <motion.div key="memory" className="workspace-view" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={motionTransitions.page}>{memoryLoadedSuccessfully ? <MemoryManager memory={memory} onChange={(next) => { void updateMemory(next); }} onDefaultChange={updateMemoryDefault} onClose={() => setPage("forge")} /> : <div className="memory-load-error glass-card"><Moon size={22} /><h2>Memory is read-only</h2><p>Lunaris could not safely read the saved memory file. It has not overwritten it. Restart after resolving the storage issue, or close this page and continue without memory.</p><button className="secondary-button" onClick={() => setPage("forge")}>Close</button></div>}</motion.div>
+            ) : page === "studio" ? (
+              <motion.div key="design-studio" className="workspace-view" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={motionTransitions.page}>
+                <DesignStudio session={activeSession} stages={activeWorkflowStages} progress={activeStageProgress} activeStageId={activeStudioStage?.id ?? null} compiledPrompt={displayedCompiled?.text ?? ""} mode={settings.providers.executorMode} model={settings.providers.executor.model} turns={executorConversation} streamingText={executorChatDraft} streaming={streaming} error={streamError} onSelectStage={setActiveStudioStageId} onRunStage={runWorkflowStage} onCopyStage={(stage) => void copyWorkflowStage(stage)} onSetStageStatus={setStageProgress} onFollowUp={sendExecutorFollowUp} onCopyFollowUp={(message) => void copyExecutorFollowUp(message)} onRecordReply={recordExecutorReply} onSaveRevision={saveBlueprintRevision} onRestoreRevision={restoreBlueprintRevision} onOpenBlueprint={() => setPage("forge")} />
+              </motion.div>
+            ) : page === "backup" ? (
+              <motion.div key="backup" className="workspace-view" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={motionTransitions.page}>
+                <BackupManager settings={settings} history={{ sessions: history }} memory={memory} skills={skills} onImport={importBackup} onClose={() => setPage("forge")} />
+              </motion.div>
             ) : loop.state.status === "idle" ? (
               <motion.div key="input" className="forge-page page-content" initial={{ opacity: 0, y: 9, filter: "blur(2px)" }} animate={{ opacity: 1, y: 0, filter: "blur(0px)" }} exit={{ opacity: 0, y: -8 }} transition={motionTransitions.page}>
-                <PromptInput config={settings.providers.architect} memory={memory} selectedProjectId={selectedProjectId} memoryEnabled={includeMemory} customTemplates={settings.customPromptTemplates} onSaveCustomTemplates={saveCustomTemplates} onProjectChange={setSelectedProjectId} onMemoryEnabledChange={(enabled) => { includeMemoryOverride.current = true; setIncludeMemory(enabled); }} onStart={startPrompt} />
+                <PromptInput config={settings.providers.architect} memory={memory} selectedProjectId={selectedProjectId} memoryEnabled={includeMemory} customTemplates={settings.customPromptTemplates} skills={skills} toolCatalog={settings.toolCatalog} onSaveCustomTemplates={saveCustomTemplates} onProjectChange={setSelectedProjectId} onMemoryEnabledChange={(enabled) => { includeMemoryOverride.current = true; setIncludeMemory(enabled); }} onStart={startPrompt} />
               </motion.div>
             ) : loop.state.status === "ready" && displayedCompiled ? (
               <motion.div key="blueprint" className="blueprint-page page-content" initial={{ opacity: 0, y: 9, filter: "blur(2px)" }} animate={{ opacity: 1, y: 0, filter: "blur(0px)" }} exit={{ opacity: 0, y: -8 }} transition={motionTransitions.page}>
