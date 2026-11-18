@@ -38,6 +38,7 @@ export function compileExecutionPrompt(args: {
   skippedQuestions?: boolean;
   attachments?: string[];
   toolCatalog?: ToolCatalog;
+  memoryContext?: string;
 }): CompiledPrompt {
   const selected = new Set(args.result.detected_skills);
   const skillContext = `${args.originalPrompt} ${args.answers.map(({ questionText, answer }) => `${questionText ?? ""} ${answer}`).join(" ")}`.toLocaleLowerCase();
@@ -88,6 +89,8 @@ ${args.originalPrompt.trim()}
 
 ## Known specifications
 ${formatSpecs(args.result.known_specs)}
+
+${args.memoryContext?.trim() ? `## User-approved saved memory\n${args.memoryContext.trim()}\n` : ""}
 
 ## Clarification answers
 ${answerSection}

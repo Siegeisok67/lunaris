@@ -4,6 +4,8 @@ import { DEFAULT_PROVIDER_SETTINGS, type AppTheme, type BackgroundMotion, type B
 import type { PromptSession } from "../types/architect";
 import type { SkillDefinition, SkillFile } from "../types/skills";
 import { EMPTY_TOOL_CATALOG, type ToolCatalog } from "../types/tools";
+import { EMPTY_MEMORY, type MemoryCollection } from "../types/memory";
+import { normalizeMemory } from "./memory";
 
 export interface LunarisSettings {
   providers: ProviderSettings;
@@ -72,6 +74,15 @@ export async function loadHistory(): Promise<HistoryCollection> {
 
 export async function saveHistory(history: HistoryCollection): Promise<void> {
   await invoke("storage_write", { key: "history", value: { sessions: history.sessions.slice(0, 250) } });
+}
+
+export async function loadMemory(): Promise<MemoryCollection> {
+  const stored = await invoke<MemoryCollection | null>("storage_read", { key: "memory" });
+  return normalizeMemory(stored ?? EMPTY_MEMORY);
+}
+
+export async function saveMemory(memory: MemoryCollection): Promise<void> {
+  await invoke("storage_write", { key: "memory", value: normalizeMemory(memory) });
 }
 
 export async function listSkillFiles(): Promise<SkillFile[]> {

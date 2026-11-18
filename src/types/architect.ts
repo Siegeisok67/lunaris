@@ -69,6 +69,8 @@ export interface PromptSession {
   pinned?: boolean;
   archived?: boolean;
   completedChecklistSteps?: string[];
+  projectId?: string | null;
+  includeMemory?: boolean;
 }
 
 export const EMPTY_ARCHITECT_RESULT: ArchitectResult = {

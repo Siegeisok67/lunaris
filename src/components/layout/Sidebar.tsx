@@ -1,10 +1,10 @@
 import { motion } from "framer-motion";
-import { Blocks, CircleHelp, Clock3, Command, Cpu, Settings2, Sparkles, WandSparkles } from "lucide-react";
+import { Blocks, BrainCircuit, CircleHelp, Clock3, Command, Cpu, Settings2, Sparkles, WandSparkles } from "lucide-react";
 import type { PromptSession } from "../../types/architect";
 import type { ProviderSettings } from "../../types/provider";
 import { ResourceWidget } from "./ResourceWidget";
 
-export type NavigationPage = "forge" | "history" | "skills" | "tools" | "models";
+export type NavigationPage = "forge" | "history" | "skills" | "tools" | "models" | "memory";
 
 interface SidebarProps {
   page: NavigationPage;
@@ -24,6 +24,7 @@ const navigation = [
   { id: "skills" as const, label: "Skill Library", icon: Sparkles },
   { id: "tools" as const, label: "Tools & MCP", icon: Blocks },
   { id: "models" as const, label: "Models & Hardware", icon: Cpu },
+  { id: "memory" as const, label: "Permanent Memory", icon: BrainCircuit },
 ];
 
 export function Sidebar({ page, history, settings, onNavigate, onOpenSession, resources, resourceError, monitorResources, onRefreshResources }: SidebarProps) {

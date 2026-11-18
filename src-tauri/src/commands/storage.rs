@@ -34,6 +34,7 @@ fn storage_file(app: &AppHandle, key: &str) -> Result<PathBuf, String> {
     let file = match key {
         "settings" => "settings.json",
         "history" => "history.json",
+        "memory" => "memory.json",
         _ => return Err("Unknown storage collection.".into()),
     };
     let root = app_root(app)?;

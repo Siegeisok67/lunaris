@@ -6,10 +6,17 @@ import type { ReferenceImage } from "../../types/architect";
 import type { ProviderConfig } from "../../types/provider";
 import { GlassCard } from "../ui/GlassCard";
 import { PROMPT_TEMPLATES } from "../../data/promptTemplates";
+import type { MemoryCollection, MemoryProject } from "../../types/memory";
+import { memoryPayload } from "../../lib/memory";
 
 interface PromptInputProps {
   config: ProviderConfig;
-  onStart: (prompt: string, images: ReferenceImage[]) => void;
+  memory: MemoryCollection;
+  selectedProjectId: string | null;
+  memoryEnabled: boolean;
+  onProjectChange: (projectId: string | null) => void;
+  onMemoryEnabledChange: (enabled: boolean) => void;
+  onStart: (prompt: string, images: ReferenceImage[], projectId: string | null, includeMemory: boolean) => void;
 }
 
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
@@ -78,7 +85,7 @@ async function fromClipboard(): Promise<ReferenceImage> {
   };
 }
 
-export function PromptInput({ config, onStart }: PromptInputProps) {
+export function PromptInput({ config, memory, selectedProjectId, memoryEnabled, onProjectChange, onMemoryEnabledChange, onStart }: PromptInputProps) {
   const [prompt, setPrompt] = useState(() => { try { return localStorage.getItem("lunaris.promptDraft") ?? ""; } catch { return ""; } });
   const [draftRecovered] = useState(() => { try { return Boolean(localStorage.getItem("lunaris.promptDraft")); } catch { return false; } });
   useEffect(() => { try { if (prompt.trim()) localStorage.setItem("lunaris.promptDraft", prompt); else localStorage.removeItem("lunaris.promptDraft"); } catch { /* Draft recovery is best effort when storage is unavailable. */ } }, [prompt]);
@@ -96,6 +103,7 @@ export function PromptInput({ config, onStart }: PromptInputProps) {
     { label: "Improve a design", text: "Help me improve this design. Review my reference images, identify the intended audience and mood, then clarify the most important changes and how I will judge the result." },
   ];
   const visibleTemplates = PROMPT_TEMPLATES.filter((template) => (templateCategory === "All" || template.category === templateCategory) && `${template.title} ${template.description} ${template.prompt}`.toLowerCase().includes(templateQuery.trim().toLowerCase()));
+  const includedMemory = memoryPayload(memory, selectedProjectId, memoryEnabled);
 
   const addFiles = async (files: FileList | File[]) => {
     setImageError(null);
@@ -136,7 +144,7 @@ export function PromptInput({ config, onStart }: PromptInputProps) {
   const start = () => {
     if (!prompt.trim() || !config.model.trim()) return;
     try { localStorage.removeItem("lunaris.promptDraft"); } catch { /* Ignore unavailable storage. */ }
-    onStart(prompt.trim(), images);
+    onStart(prompt.trim(), images, selectedProjectId, memoryEnabled);
   };
 
   return (
@@ -155,6 +163,11 @@ export function PromptInput({ config, onStart }: PromptInputProps) {
           <span className="prompt-length">{prompt.length.toLocaleString()} / 16,000</span>
         </div>
         {draftRecovered && prompt.trim() && <p className="draft-recovery-note">Draft restored from your last visit. You can edit it before continuing.</p>}
+        <div className="prompt-memory-controls">
+          <label className="settings-field prompt-project-select"><span>Project context</span><select value={selectedProjectId ?? ""} onChange={(event) => onProjectChange(event.target.value || null)}><option value="">No project selected</option>{memory.projects.map((project: MemoryProject) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
+          <label className="prompt-memory-toggle"><input type="checkbox" checked={memoryEnabled} onChange={(event) => onMemoryEnabledChange(event.target.checked)} /><span className="settings-switch" aria-hidden="true" /><span><strong>Include saved memory</strong><small>{!memoryEnabled ? "No saved memory will be shared" : includedMemory.entries.length ? `${includedMemory.entries.length} saved fact${includedMemory.entries.length === 1 ? "" : "s"}${includedMemory.includesProjectOverview ? " plus project overview" : ""} will be shared${includedMemory.omittedCount ? ` · ${includedMemory.omittedCount} over the context limit` : ""}` : includedMemory.includesProjectOverview ? "Project overview will be shared" : "No saved facts for this prompt"}</small></span></label>
+          {includedMemory.text && <details className="prompt-memory-preview"><summary>Review exact context being shared</summary><pre>{includedMemory.text}</pre></details>}
+        </div>
         <div
           className="prompt-dropzone"
           onDragEnter={(event) => { event.preventDefault(); setDragging(true); }}

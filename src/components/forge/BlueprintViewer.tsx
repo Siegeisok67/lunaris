@@ -7,12 +7,16 @@ import {
   Copy,
   FileText,
   FileJson,
+  BookmarkPlus,
   LoaderCircle,
   Play,
   Sparkles,
   Square,
 } from "lucide-react";
 import type { CompiledPrompt } from "../../lib/promptCompiler";
+import { hasMemory } from "../../lib/memory";
+import type { AnswerRecord } from "../../types/architect";
+import type { MemoryCollection, MemoryScope } from "../../types/memory";
 import type { ExecutorMode } from "../../types/provider";
 import { GlassCard } from "../ui/GlassCard";
 
@@ -26,6 +30,11 @@ interface BlueprintViewerProps {
   completedSteps: string[];
   onToggleStep: (id: string) => void;
   onClearChecklist: () => void;
+  answers: AnswerRecord[];
+  memory: MemoryCollection;
+  projectId: string | null;
+  projectName: string | null;
+  onSaveMemory: (answer: AnswerRecord, scope: MemoryScope) => void;
   onStream: () => void;
   onStop: () => void;
   streaming: boolean;
@@ -44,6 +53,11 @@ export function BlueprintViewer({
   completedSteps,
   onToggleStep,
   onClearChecklist,
+  answers,
+  memory,
+  projectId,
+  projectName,
+  onSaveMemory,
   onStream,
   onStop,
   streaming,
@@ -182,6 +196,17 @@ export function BlueprintViewer({
               </ul>
             ) : <p className="blueprint-aside-empty">No unanswered clarification questions.</p>}
           </GlassCard>
+
+          {answers.length > 0 && <GlassCard className="blueprint-memory-suggestions" delay={0.28}>
+            <div className="blueprint-aside-title"><BookmarkPlus size={15} aria-hidden="true" /> MEMORY SUGGESTIONS</div>
+            <p className="memory-suggestions-note">Save only facts you want Lunaris to remember in future sessions. Nothing here is saved until you choose.</p>
+            <ul>{answers.map((answer) => {
+              const memoryTitle = answer.questionText || "Clarification answer";
+              const savedProfile = hasMemory(memory, memoryTitle, answer.answer, "profile", null);
+              const savedProject = projectId ? hasMemory(memory, memoryTitle, answer.answer, "project", projectId) : false;
+              return <li key={answer.questionId}><strong>{answer.questionText || answer.questionId}</strong><p>{answer.answer}</p><div className="memory-suggestion-actions"><button type="button" className="quiet-action" disabled={savedProfile} onClick={() => onSaveMemory(answer, "profile")}>{savedProfile ? <Check size={13} /> : <BookmarkPlus size={13} />}{savedProfile ? "In Profile" : "Save to Profile"}</button>{projectId && <button type="button" className="quiet-action" disabled={savedProject} onClick={() => onSaveMemory(answer, "project")}>{savedProject ? <Check size={13} /> : <BookmarkPlus size={13} />}{savedProject ? `In ${projectName ?? "Project"}` : `Save to ${projectName ?? "Project"}`}</button>}</div></li>;
+            })}</ul>
+          </GlassCard>}
 
           <GlassCard className="blueprint-handoff-card" delay={0.3}>
             <div className="blueprint-aside-title"><Copy size={15} aria-hidden="true" /> HANDOFF</div>

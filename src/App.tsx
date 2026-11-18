@@ -12,6 +12,7 @@ import { BlueprintViewer } from "./components/forge/BlueprintViewer";
 import { ProviderSettings } from "./components/modals/ProviderSettings";
 import { SkillManager } from "./components/modals/SkillManager";
 import { ToolLibrary } from "./components/modals/ToolLibrary";
+import { MemoryManager } from "./components/memory/MemoryManager";
 import { ModelCenter } from "./components/models/ModelCenter";
 import { ModelChangeRequest, type ExecutorRecommendation } from "./components/models/ModelChangeRequest";
 import { useSystemResources } from "./hooks/useSystemResources";
@@ -21,8 +22,10 @@ import { useClarificationLoop } from "./hooks/useClarificationLoop";
 import { cancelStream, streamText } from "./lib/llmRouter";
 import { compileExecutionPrompt } from "./lib/promptCompiler";
 import { motionTransitions } from "./lib/motion";
-import { loadHistory, loadSettings, loadSkills, saveHistory, saveSettings, type LunarisSettings } from "./lib/storage";
-import type { PromptSession, ReferenceImage } from "./types/architect";
+import { loadHistory, loadMemory, loadSettings, loadSkills, saveHistory, saveMemory, saveSettings, type LunarisSettings } from "./lib/storage";
+import { hasMemory, memoryContext } from "./lib/memory";
+import type { AnswerRecord, PromptSession, ReferenceImage } from "./types/architect";
+import { EMPTY_MEMORY, MEMORY_LIMITS, type MemoryCollection, type MemoryEntry, type MemoryScope } from "./types/memory";
 import { DEFAULT_PROVIDER_SETTINGS } from "./types/provider";
 import type { ProviderSettings as ProviderSettingsType } from "./types/provider";
 import type { SkillDefinition } from "./types/skills";
@@ -71,6 +74,8 @@ function exportSession(session: PromptSession, format: "md" | "json") {
     detectedTools: session.result?.detected_tools ?? [],
     compiledPrompt: session.compiledPrompt,
     completedChecklistSteps: session.completedChecklistSteps ?? [],
+    projectId: session.projectId ?? null,
+    includeMemory: session.includeMemory ?? false,
   };
   const content = format === "json"
     ? JSON.stringify(payload, null, 2)
@@ -135,6 +140,10 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<LunarisSettings>(INITIAL_SETTINGS);
   const [skills, setSkills] = useState<SkillDefinition[]>([]);
+  const [memory, setMemory] = useState<MemoryCollection>(EMPTY_MEMORY);
+  const [memoryLoadedSuccessfully, setMemoryLoadedSuccessfully] = useState(false);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [includeMemory, setIncludeMemory] = useState(true);
   const [history, setHistory] = useState<PromptSession[]>([]);
   const [historyQuery, setHistoryQuery] = useState("");
   const [historyFilter, setHistoryFilter] = useState<"active" | "archived">("active");
@@ -147,6 +156,10 @@ export default function App() {
   const [streamError, setStreamError] = useState<string | null>(null);
   const [modelRequest, setModelRequest] = useState<ExecutorRecommendation | null>(null);
   const sessionId = useRef<string | null>(null);
+  const requestMemoryContext = useRef("");
+  const memoryWriteQueue = useRef<Promise<void>>(Promise.resolve());
+  const persistedMemory = useRef<MemoryCollection>(EMPTY_MEMORY);
+  const includeMemoryOverride = useRef(false);
   const restoredSession = useRef(false);
   const activeStreamId = useRef<string | null>(null);
   const dismissedModelRequests = useRef(new Set<string>());
@@ -193,7 +206,7 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
-    void Promise.allSettled([loadSettings(), loadHistory(), loadSkills()]).then(async ([savedSettings, savedHistory, savedSkills]) => {
+    void Promise.allSettled([loadSettings(), loadHistory(), loadSkills(), loadMemory()]).then(async ([savedSettings, savedHistory, savedSkills, savedMemory]) => {
       if (!active) return;
       if (savedSettings.status === "fulfilled") {
         setSettings(savedSettings.value);
@@ -209,6 +222,12 @@ export default function App() {
       else setNotice(`History could not be loaded: ${errorText(savedHistory.reason)}`);
       if (savedSkills.status === "fulfilled") setSkills(savedSkills.value);
       else setNotice(`Skill library could not be loaded: ${errorText(savedSkills.reason)}`);
+      if (savedMemory.status === "fulfilled") {
+        persistedMemory.current = savedMemory.value;
+        setMemory(savedMemory.value);
+        setMemoryLoadedSuccessfully(true);
+        setIncludeMemory(savedMemory.value.enabledByDefault);
+      } else setNotice(`Permanent memory could not be loaded: ${errorText(savedMemory.reason)}`);
       setInitialized(true);
     });
     return () => { active = false; };
@@ -243,8 +262,11 @@ export default function App() {
       skippedQuestions: loop.state.skippedQuestions,
       attachments: referenceLines,
       toolCatalog: settings.toolCatalog,
+      memoryContext: requestMemoryContext.current,
     });
   }, [loop.state.status, loop.state.result, loop.state.originalPrompt, loop.state.answers, loop.state.skippedQuestions, skills, referenceLines.join("\n"), settings.toolCatalog]);
+
+  const activeMemoryContext = requestMemoryContext.current;
 
   const displayedCompiled = useMemo(() => {
     if (!compiled || !restoredSession.current) return compiled;
@@ -273,31 +295,41 @@ export default function App() {
         pinned: prior?.pinned,
         archived: prior?.archived,
         completedChecklistSteps: prior?.completedChecklistSteps ?? [],
+        projectId: selectedProjectId,
+        includeMemory,
       };
       return [session, ...current.filter((item) => item.id !== id)].slice(0, 250);
     });
-  }, [compiled, loop.state.originalPrompt, loop.state.result, loop.state.answers, loop.state.skippedQuestions]);
+  }, [compiled, loop.state.originalPrompt, loop.state.result, loop.state.answers, loop.state.skippedQuestions, selectedProjectId, includeMemory]);
 
-  const startPrompt = (prompt: string, attachments: ReferenceImage[]) => {
+  const startPrompt = (prompt: string, attachments: ReferenceImage[], projectId: string | null, useMemory: boolean) => {
     setModelRequest(null);
     sessionId.current = crypto.randomUUID();
     restoredSession.current = false;
     setImages(attachments);
+    setSelectedProjectId(projectId);
+    setIncludeMemory(useMemory);
+    includeMemoryOverride.current = true;
+    requestMemoryContext.current = memoryContext(memory, projectId, useMemory);
     setStagedHandoffPaths(null);
     setExecutorText("");
     setStreamError(null);
     setPage("forge");
-    void loop.start(prompt, attachments, effectiveContext(settings.providers.architect, "architect", resources.snapshot, prompt, attachments.length), skills, settings.toolCatalog, executorContextSummary(settings.providers.executor, resources.snapshot, prompt, attachments.length), resources.snapshot);
+    void loop.start(prompt, attachments, effectiveContext(settings.providers.architect, "architect", resources.snapshot, prompt, attachments.length), skills, settings.toolCatalog, executorContextSummary(settings.providers.executor, resources.snapshot, prompt, attachments.length), resources.snapshot, requestMemoryContext.current);
   };
 
   const newPrompt = () => {
     setModelRequest(null);
     if (activeStreamId.current) void cancelStream(activeStreamId.current);
     sessionId.current = null;
+    requestMemoryContext.current = "";
     restoredSession.current = false;
     activeStreamId.current = null;
     stopRequested.current = false;
     setImages([]);
+    setSelectedProjectId(null);
+    setIncludeMemory(memory.enabledByDefault);
+    includeMemoryOverride.current = false;
     setStagedHandoffPaths(null);
     setExecutorText("");
     setStreamError(null);
@@ -310,7 +342,11 @@ export default function App() {
     if (activeStreamId.current) void cancelStream(activeStreamId.current);
     sessionId.current = session.id;
     restoredSession.current = true;
+    requestMemoryContext.current = "";
     setImages([]);
+    setSelectedProjectId(session.projectId && memory.projects.some((project) => project.id === session.projectId) ? session.projectId : null);
+    setIncludeMemory(session.includeMemory ?? memory.enabledByDefault);
+    includeMemoryOverride.current = true;
     setStagedHandoffPaths(null);
     setExecutorText("");
     setStreamError(null);
@@ -358,6 +394,48 @@ export default function App() {
     const model = modelRequest?.model;
     if (model) dismissedModelRequests.current.add(`${sessionId.current ?? loop.state.originalPrompt}:${model}`);
     setModelRequest(null);
+  };
+
+  const updateMemory = async (next: MemoryCollection, savedNotice = "Permanent memory saved.") => {
+    if (!memoryLoadedSuccessfully) {
+      setNotice("Memory storage could not be loaded safely, so changes were not saved.");
+      return;
+    }
+    setMemory(next);
+    if (selectedProjectId && !next.projects.some((project) => project.id === selectedProjectId)) setSelectedProjectId(null);
+    const write = memoryWriteQueue.current.catch(() => undefined).then(() => saveMemory(next));
+    memoryWriteQueue.current = write;
+    try {
+      await write;
+      persistedMemory.current = next;
+      setNotice(savedNotice);
+    } catch (error) {
+      setMemory((current) => current === next ? persistedMemory.current : current);
+      setNotice(`Permanent memory could not be saved: ${errorText(error)}`);
+    }
+  };
+
+  const updateMemoryDefault = (enabled: boolean) => {
+    if (!includeMemoryOverride.current && loop.state.status === "idle") setIncludeMemory(enabled);
+    void updateMemory({ ...memory, enabledByDefault: enabled });
+  };
+
+  const saveAnswerMemory = (answer: AnswerRecord, scope: MemoryScope) => {
+    const projectId = scope === "project" ? selectedProjectId : null;
+    const title = (answer.questionText || "Clarification answer").trim().slice(0, MEMORY_LIMITS.titleCharacters);
+    const content = answer.answer.trim().slice(0, MEMORY_LIMITS.entryCharacters);
+    if (!content || (scope === "project" && !projectId)) return;
+    if (hasMemory(memory, title, content, scope, projectId)) {
+      setNotice("That fact is already saved in memory.");
+      return;
+    }
+    if (memory.entries.length >= MEMORY_LIMITS.entries) {
+      setNotice(`Memory is full (${MEMORY_LIMITS.entries} entries). Delete an old fact before saving another.`);
+      return;
+    }
+    const now = new Date().toISOString();
+    const entry: MemoryEntry = { id: crypto.randomUUID(), title, content, scope, projectId, enabled: true, source: "approved-answer", createdAt: now, updatedAt: now };
+    void updateMemory({ ...memory, entries: [entry, ...memory.entries] }, `Saved to ${scope === "profile" ? "Profile" : memory.projects.find((project) => project.id === projectId)?.name ?? "Project"} memory.`);
   };
 
   const toggleSessionFlag = (id: string, field: "pinned" | "archived") => {
@@ -429,6 +507,7 @@ export default function App() {
           skippedQuestions: loop.state.skippedQuestions,
           attachments,
           toolCatalog: settings.toolCatalog,
+          memoryContext: requestMemoryContext.current,
         }).text
         : displayedCompiled.text;
       await invoke("clipboard_write_text", { text: promptToCopy });
@@ -544,17 +623,19 @@ export default function App() {
               <motion.div key="tools" className="workspace-view" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={motionTransitions.page}><ToolLibrary catalog={settings.toolCatalog} onSave={saveToolCatalog} onClose={() => setPage("forge")} /></motion.div>
             ) : page === "models" ? (
               <motion.div key="models" className="workspace-view" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={motionTransitions.page}><ModelCenter providers={settings.providers} resources={resources.snapshot} preference={settings.modelPreference} contextRecommendation={loop.state.result?.context_recommendation ?? null} onProvidersChange={(providers) => saveModelSettings({ providers })} onPreferenceChange={(modelPreference) => saveModelSettings({ modelPreference })} /></motion.div>
+            ) : page === "memory" ? (
+              <motion.div key="memory" className="workspace-view" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={motionTransitions.page}>{memoryLoadedSuccessfully ? <MemoryManager memory={memory} onChange={(next) => { void updateMemory(next); }} onDefaultChange={updateMemoryDefault} onClose={() => setPage("forge")} /> : <div className="memory-load-error glass-card"><Moon size={22} /><h2>Memory is read-only</h2><p>Lunaris could not safely read the saved memory file. It has not overwritten it. Restart after resolving the storage issue, or close this page and continue without memory.</p><button className="secondary-button" onClick={() => setPage("forge")}>Close</button></div>}</motion.div>
             ) : loop.state.status === "idle" ? (
               <motion.div key="input" className="forge-page page-content" initial={{ opacity: 0, y: 9, filter: "blur(2px)" }} animate={{ opacity: 1, y: 0, filter: "blur(0px)" }} exit={{ opacity: 0, y: -8 }} transition={motionTransitions.page}>
-                <PromptInput config={settings.providers.architect} onStart={startPrompt} />
+                <PromptInput config={settings.providers.architect} memory={memory} selectedProjectId={selectedProjectId} memoryEnabled={includeMemory} onProjectChange={setSelectedProjectId} onMemoryEnabledChange={(enabled) => { includeMemoryOverride.current = true; setIncludeMemory(enabled); }} onStart={startPrompt} />
               </motion.div>
             ) : loop.state.status === "ready" && displayedCompiled ? (
               <motion.div key="blueprint" className="blueprint-page page-content" initial={{ opacity: 0, y: 9, filter: "blur(2px)" }} animate={{ opacity: 1, y: 0, filter: "blur(0px)" }} exit={{ opacity: 0, y: -8 }} transition={motionTransitions.page}>
-                <BlueprintViewer compiled={displayedCompiled} executorMode={settings.providers.executorMode} executorModel={settings.providers.executor.model} checklist={checklist} completedSteps={completedChecklistSteps} onToggleStep={toggleChecklistStep} onClearChecklist={clearChecklist} onCopy={copyPrompt} onExport={(format) => { const session = currentSessionForExport(); if (session) exportSession(session, format); }} onStream={() => void startStream()} onStop={stopStream} streaming={streaming} executorText={executorText} streamError={streamError} onNewPrompt={newPrompt} />
+                <BlueprintViewer compiled={displayedCompiled} executorMode={settings.providers.executorMode} executorModel={settings.providers.executor.model} checklist={checklist} completedSteps={completedChecklistSteps} onToggleStep={toggleChecklistStep} onClearChecklist={clearChecklist} answers={loop.state.answers} memory={memory} projectId={selectedProjectId} projectName={memory.projects.find((project) => project.id === selectedProjectId)?.name ?? null} onSaveMemory={saveAnswerMemory} onCopy={copyPrompt} onExport={(format) => { const session = currentSessionForExport(); if (session) exportSession(session, format); }} onStream={() => void startStream()} onStop={stopStream} streaming={streaming} executorText={executorText} streamError={streamError} onNewPrompt={newPrompt} />
               </motion.div>
             ) : (
               <motion.div key="clarification" className="clarification-page page-content" initial={{ opacity: 0, y: 9, filter: "blur(2px)" }} animate={{ opacity: 1, y: 0, filter: "blur(0px)" }} exit={{ opacity: 0, y: -8 }} transition={motionTransitions.page}>
-                <ClarificationLoop state={loop.state} onAnswer={(id, answer) => void loop.answer(id, answer, effectiveContext(settings.providers.architect, "architect", resources.snapshot, loop.state.originalPrompt, images.length), skills, settings.toolCatalog, images, executorContextSummary(settings.providers.executor, resources.snapshot, loop.state.originalPrompt, images.length), resources.snapshot)} onSkip={() => void loop.skipAndCompile(effectiveContext(settings.providers.architect, "architect", resources.snapshot, loop.state.originalPrompt, images.length), skills, settings.toolCatalog, images, executorContextSummary(settings.providers.executor, resources.snapshot, loop.state.originalPrompt, images.length), resources.snapshot)} onRetry={() => void loop.retry(effectiveContext(settings.providers.architect, "architect", resources.snapshot, loop.state.originalPrompt, images.length), skills, settings.toolCatalog, images, executorContextSummary(settings.providers.executor, resources.snapshot, loop.state.originalPrompt, images.length), resources.snapshot)} onBack={newPrompt} />
+                <ClarificationLoop state={loop.state} onAnswer={(id, answer) => void loop.answer(id, answer, effectiveContext(settings.providers.architect, "architect", resources.snapshot, loop.state.originalPrompt, images.length), skills, settings.toolCatalog, images, executorContextSummary(settings.providers.executor, resources.snapshot, loop.state.originalPrompt, images.length), resources.snapshot, activeMemoryContext)} onSkip={() => void loop.skipAndCompile(effectiveContext(settings.providers.architect, "architect", resources.snapshot, loop.state.originalPrompt, images.length), skills, settings.toolCatalog, images, executorContextSummary(settings.providers.executor, resources.snapshot, loop.state.originalPrompt, images.length), resources.snapshot, activeMemoryContext)} onRetry={() => void loop.retry(effectiveContext(settings.providers.architect, "architect", resources.snapshot, loop.state.originalPrompt, images.length), skills, settings.toolCatalog, images, executorContextSummary(settings.providers.executor, resources.snapshot, loop.state.originalPrompt, images.length), resources.snapshot, activeMemoryContext)} onBack={newPrompt} />
               </motion.div>
             )}
           </AnimatePresence>
